@@ -1,0 +1,6 @@
+{
+  "name": "نظام إدارة الأصول والعهد والصيانة",
+  "description": "نظام شامل لإدارة الأصول والعهد وبلاغات الصيانة مع دعم العمل بدون إنترنت والمزامنة التلقائية والتقارير",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
