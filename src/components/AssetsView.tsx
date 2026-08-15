@@ -50,7 +50,7 @@ const DEFAULT_ACCESSORIES_PRESETS = [
 
 export const AssetsView: React.FC<AssetsViewProps> = ({
   currentUser,
-  assets,
+  assets = [],
   onRefresh,
   onOpenNewTicketForAsset,
 }) => {
@@ -86,13 +86,16 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
   // Excel Import Status
   const [importNotice, setImportNotice] = useState<{ type: 'success' | 'error'; message: string; errors?: string[] } | null>(null);
 
+  // Safe list
+  const safeAssets = useMemo(() => (Array.isArray(assets) ? assets : []), [assets]);
+
   // Filter accessible assets for Supervisor (can only see assigned department)
   const accessibleAssets = useMemo(() => {
     if (currentUser?.role === 'supervisor' && currentUser?.assignedDepartment) {
-      return assets.filter((a) => a.mainDepartment.trim() === currentUser.assignedDepartment?.trim());
+      return safeAssets.filter((a) => a.mainDepartment && a.mainDepartment.trim() === currentUser.assignedDepartment?.trim());
     }
-    return assets;
-  }, [assets, currentUser]);
+    return safeAssets;
+  }, [safeAssets, currentUser]);
 
   // Group departments & sub-departments
   const departmentsHierarchy = useMemo(() => {

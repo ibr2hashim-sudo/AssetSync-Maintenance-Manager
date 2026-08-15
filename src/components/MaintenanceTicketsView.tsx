@@ -26,8 +26,8 @@ import { MaintenanceReportTemplate } from './MaintenanceReportTemplate';
 
 interface MaintenanceTicketsViewProps {
   currentUser: User | null;
-  tickets: MaintenanceTicket[];
-  assets: Asset[];
+  tickets?: MaintenanceTicket[];
+  assets?: Asset[];
   onRefresh: () => void;
   openCreateWithAsset?: Asset | null;
   onClearCreateAsset?: () => void;
@@ -35,8 +35,8 @@ interface MaintenanceTicketsViewProps {
 
 export const MaintenanceTicketsView: React.FC<MaintenanceTicketsViewProps> = ({
   currentUser,
-  tickets,
-  assets,
+  tickets = [],
+  assets = [],
   onRefresh,
   openCreateWithAsset,
   onClearCreateAsset,
@@ -57,21 +57,24 @@ export const MaintenanceTicketsView: React.FC<MaintenanceTicketsViewProps> = ({
 
   const [isExportingPDF, setIsExportingPDF] = useState(false);
 
+  const safeTickets = useMemo(() => (Array.isArray(tickets) ? tickets : []), [tickets]);
+  const safeAssets = useMemo(() => (Array.isArray(assets) ? assets : []), [assets]);
+
   // Supervisor department filter for tickets
   const accessibleTickets = useMemo(() => {
     if (currentUser?.role === 'supervisor' && currentUser?.assignedDepartment) {
-      return tickets.filter((t) => t.mainDepartment.trim() === currentUser.assignedDepartment?.trim());
+      return safeTickets.filter((t) => t.mainDepartment && t.mainDepartment.trim() === currentUser.assignedDepartment?.trim());
     }
-    return tickets;
-  }, [tickets, currentUser]);
+    return safeTickets;
+  }, [safeTickets, currentUser]);
 
   // Accessible assets for ticket creation
   const accessibleAssets = useMemo(() => {
     if (currentUser?.role === 'supervisor' && currentUser?.assignedDepartment) {
-      return assets.filter((a) => a.mainDepartment.trim() === currentUser.assignedDepartment?.trim());
+      return safeAssets.filter((a) => a.mainDepartment && a.mainDepartment.trim() === currentUser.assignedDepartment?.trim());
     }
-    return assets;
-  }, [assets, currentUser]);
+    return safeAssets;
+  }, [safeAssets, currentUser]);
 
   // Filtered tickets
   const filteredTickets = useMemo(() => {

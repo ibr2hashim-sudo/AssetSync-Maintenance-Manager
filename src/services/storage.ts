@@ -39,7 +39,14 @@ const DEFAULT_CATEGORIES: string[] = ['التكييف', 'الزيوت والفل
 function getItem<T>(key: string, defaultValue: T): T {
   try {
     const data = localStorage.getItem(key);
-    return data ? JSON.parse(data) : defaultValue;
+    if (!data || data === 'undefined' || data === 'null') {
+      return defaultValue;
+    }
+    const parsed = JSON.parse(data);
+    if (parsed === null || parsed === undefined) {
+      return defaultValue;
+    }
+    return parsed;
   } catch (err) {
     console.error(`Error reading ${key} from storage:`, err);
     return defaultValue;
@@ -58,7 +65,7 @@ export class StorageService {
   // Current User Session
   static getCurrentUser(): User | null {
     const user = getItem<User | null>(STORAGE_KEYS.CURRENT_USER, null);
-    if (!user) {
+    if (!user || typeof user !== 'object' || !user.username) {
       // Default to admin user for immediate readiness
       const users = this.getUsers();
       const adminUser = users.find((u) => u.username === 'admin') || DEFAULT_USERS[0];
@@ -75,7 +82,7 @@ export class StorageService {
   // Users Management
   static getUsers(): User[] {
     const users = getItem<User[]>(STORAGE_KEYS.USERS, []);
-    if (users.length === 0) {
+    if (!Array.isArray(users) || users.length === 0) {
       setItem(STORAGE_KEYS.USERS, DEFAULT_USERS);
       return DEFAULT_USERS;
     }
@@ -152,7 +159,8 @@ export class StorageService {
 
   // Assets Management (Starts Empty)
   static getAssets(): Asset[] {
-    return getItem<Asset[]>(STORAGE_KEYS.ASSETS, []);
+    const assets = getItem<Asset[]>(STORAGE_KEYS.ASSETS, []);
+    return Array.isArray(assets) ? assets : [];
   }
 
   static saveAsset(asset: Omit<Asset, 'id' | 'createdAt' | 'updatedAt' | 'difference'> & { id?: string }): Asset {
@@ -306,7 +314,8 @@ export class StorageService {
 
   // Maintenance Tickets Management
   static getTickets(): MaintenanceTicket[] {
-    return getItem<MaintenanceTicket[]>(STORAGE_KEYS.TICKETS, []);
+    const tickets = getItem<MaintenanceTicket[]>(STORAGE_KEYS.TICKETS, []);
+    return Array.isArray(tickets) ? tickets : [];
   }
 
   static createTicket(data: {
@@ -499,11 +508,13 @@ export class StorageService {
 
   // Periodic Maintenance Management
   static getPeriodicRecords(): PeriodicMaintenanceRecord[] {
-    return getItem<PeriodicMaintenanceRecord[]>(STORAGE_KEYS.PERIODIC, []);
+    const records = getItem<PeriodicMaintenanceRecord[]>(STORAGE_KEYS.PERIODIC, []);
+    return Array.isArray(records) ? records : [];
   }
 
   static getPeriodicCategories(): string[] {
-    return getItem<string[]>(STORAGE_KEYS.CATEGORIES, DEFAULT_CATEGORIES);
+    const cats = getItem<string[]>(STORAGE_KEYS.CATEGORIES, DEFAULT_CATEGORIES);
+    return Array.isArray(cats) && cats.length > 0 ? cats : DEFAULT_CATEGORIES;
   }
 
   static addPeriodicCategory(cat: string): string[] {
@@ -541,7 +552,8 @@ export class StorageService {
 
   // History Logs
   static getHistory(): HistoryLog[] {
-    return getItem<HistoryLog[]>(STORAGE_KEYS.HISTORY, []);
+    const history = getItem<HistoryLog[]>(STORAGE_KEYS.HISTORY, []);
+    return Array.isArray(history) ? history : [];
   }
 
   static getHistoryLogs(): HistoryLog[] {

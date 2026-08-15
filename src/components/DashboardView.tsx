@@ -14,54 +14,59 @@ import {
   TrendingUp,
   Activity,
 } from 'lucide-react';
-import { Asset, MaintenanceTicket, User, HistoryLog } from '../types';
+import { Asset, MaintenanceTicket, User, HistoryLog, PeriodicMaintenanceRecord } from '../types';
 
 interface DashboardViewProps {
   currentUser: User | null;
-  assets: Asset[];
-  tickets: MaintenanceTicket[];
-  users: User[];
-  historyLogs: HistoryLog[];
+  assets?: Asset[];
+  tickets?: MaintenanceTicket[];
+  users?: User[];
+  periodicRecords?: PeriodicMaintenanceRecord[];
+  historyLogs?: HistoryLog[];
   onNavigate: (tab: string) => void;
-  onOpenNewTicket: () => void;
-  onOpenNewAsset: () => void;
-  onOpenNewUser: () => void;
-  onOpenImport: () => void;
-  onManualSync: () => void;
-  isSyncing: boolean;
+  onOpenNewTicket?: () => void;
+  onOpenNewAsset?: () => void;
+  onOpenNewUser?: () => void;
+  onOpenImport?: () => void;
+  onManualSync?: () => void;
+  isSyncing?: boolean;
 }
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
   currentUser,
-  assets,
-  tickets,
-  users,
-  historyLogs,
+  assets = [],
+  tickets = [],
+  users = [],
+  historyLogs = [],
   onNavigate,
   onOpenNewTicket,
   onOpenNewAsset,
   onOpenNewUser,
   onOpenImport,
   onManualSync,
-  isSyncing,
+  isSyncing = false,
 }) => {
+  const safeAssets = Array.isArray(assets) ? assets : [];
+  const safeTickets = Array.isArray(tickets) ? tickets : [];
+  const safeUsers = Array.isArray(users) ? users : [];
+
   // Compute departments count
   const uniqueDepartments = Array.from(
-    new Set(assets.map((a) => a.mainDepartment).filter(Boolean))
+    new Set(safeAssets.map((a) => a.mainDepartment).filter(Boolean))
   );
 
   // Compute tickets counts
-  const pendingTickets = tickets.filter((t) => t.status === 'معلق');
-  const inProgressTickets = tickets.filter((t) => t.status === 'قيد الصيانة');
-  const completedTickets = tickets.filter((t) => t.status === 'تم الصيانة');
+  const pendingTickets = safeTickets.filter((t) => t.status === 'معلق');
+  const inProgressTickets = safeTickets.filter((t) => t.status === 'قيد الصيانة');
+  const completedTickets = safeTickets.filter((t) => t.status === 'تم الصيانة');
 
   // Filter accessible assets if user is supervisor
   const accessibleAssets =
     currentUser?.role === 'supervisor' && currentUser?.assignedDepartment
-      ? assets.filter((a) => a.mainDepartment === currentUser.assignedDepartment)
-      : assets;
+      ? safeAssets.filter((a) => a.mainDepartment === currentUser.assignedDepartment)
+      : safeAssets;
 
-  const activeUsersCount = users.filter((u) => u.isActive !== false).length;
+  const activeUsersCount = safeUsers.filter((u) => u.isActive !== false).length;
 
   return (
     <div className="space-y-6">

@@ -21,21 +21,24 @@ import { StorageService } from '../services/storage';
 
 interface PeriodicMaintenanceViewProps {
   currentUser: User | null;
-  assets: Asset[];
-  periodicRecords: PeriodicMaintenanceRecord[];
+  assets?: Asset[];
+  periodicRecords?: PeriodicMaintenanceRecord[];
   onRefresh: () => void;
 }
 
 export const PeriodicMaintenanceView: React.FC<PeriodicMaintenanceViewProps> = ({
   currentUser,
-  assets,
-  periodicRecords,
+  assets = [],
+  periodicRecords = [],
   onRefresh,
 }) => {
   // Categories from storage
-  const [categories, setCategories] = useState<string[]>(StorageService.getPeriodicCategories());
+  const [categories, setCategories] = useState<string[]>(() => StorageService.getPeriodicCategories());
   const [newCatName, setNewCatName] = useState('');
   const [showAddCatModal, setShowAddCatModal] = useState(false);
+
+  const safeAssets = useMemo(() => (Array.isArray(assets) ? assets : []), [assets]);
+  const safeRecords = useMemo(() => (Array.isArray(periodicRecords) ? periodicRecords : []), [periodicRecords]);
 
   // Hierarchy navigation states:
   // Step 1: Category
@@ -53,12 +56,12 @@ export const PeriodicMaintenanceView: React.FC<PeriodicMaintenanceViewProps> = (
 
   // Departments with assets
   const departmentsList = useMemo(() => {
-    return Array.from(new Set(assets.map((a) => a.mainDepartment).filter(Boolean)));
-  }, [assets]);
+    return Array.from(new Set(safeAssets.map((a) => a.mainDepartment).filter(Boolean)));
+  }, [safeAssets]);
 
   // Filtered records based on active hierarchy
   const filteredRecords = useMemo(() => {
-    let list = periodicRecords;
+    let list = safeRecords;
 
     if (selectedCategory) {
       list = list.filter((r) => r.category === selectedCategory);
@@ -86,7 +89,7 @@ export const PeriodicMaintenanceView: React.FC<PeriodicMaintenanceViewProps> = (
     }
 
     return list;
-  }, [periodicRecords, selectedCategory, selectedDept, selectedAsset, searchTerm]);
+  }, [safeRecords, selectedCategory, selectedDept, selectedAsset, searchTerm]);
 
   // Add new category
   const handleAddNewCategory = (e: React.FormEvent) => {

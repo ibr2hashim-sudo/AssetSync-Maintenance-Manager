@@ -225,8 +225,24 @@ export default function App() {
             currentUser={currentUser}
             assets={assets}
             tickets={tickets}
+            users={users}
             periodicRecords={periodicRecords}
+            historyLogs={StorageService.getHistory()}
             onNavigate={(view) => setActiveView(view as ActiveView)}
+            onOpenNewTicket={() => {
+              setTicketTargetAsset(null);
+              setActiveView('tickets');
+            }}
+            onOpenNewAsset={() => setActiveView('assets')}
+            onOpenNewUser={() => setActiveView('users')}
+            onOpenImport={() => setActiveView('assets')}
+            onManualSync={() => {
+              setIsSyncing(true);
+              StorageService.triggerManualSync()
+                .then(() => reloadData())
+                .finally(() => setIsSyncing(false));
+            }}
+            isSyncing={isSyncing}
           />
         )}
 
@@ -236,7 +252,7 @@ export default function App() {
             currentUser={currentUser}
             assets={assets}
             onRefresh={reloadData}
-            onCreateTicketForAsset={handleCreateTicketForAsset}
+            onOpenNewTicketForAsset={handleCreateTicketForAsset}
           />
         )}
 

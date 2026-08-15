@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Users as UsersIcon,
   Plus,
@@ -20,27 +20,30 @@ import { StorageService } from '../services/storage';
 
 interface UserManagementViewProps {
   currentUser: User | null;
-  users: User[];
-  assets: Asset[];
+  users?: User[];
+  assets?: Asset[];
   onRefresh: () => void;
 }
 
 export const UserManagementView: React.FC<UserManagementViewProps> = ({
   currentUser,
-  users,
-  assets,
+  users = [],
+  assets = [],
   onRefresh,
 }) => {
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [deleteConfirmUser, setDeleteConfirmUser] = useState<User | null>(null);
 
-  // Departments list to assign to supervisors
-  const departmentsList = Array.from(
-    new Set(assets.map((a) => a.mainDepartment).filter(Boolean))
-  );
+  const safeUsers = useMemo(() => (Array.isArray(users) ? users : []), [users]);
+  const safeAssets = useMemo(() => (Array.isArray(assets) ? assets : []), [assets]);
 
-  const activeCount = users.filter((u) => u.isActive !== false).length;
+  // Departments list to assign to supervisors
+  const departmentsList = useMemo(() => {
+    return Array.from(new Set(safeAssets.map((a) => a.mainDepartment).filter(Boolean)));
+  }, [safeAssets]);
+
+  const activeCount = safeUsers.filter((u) => u.isActive !== false).length;
 
   const getRoleBadge = (role: UserRole) => {
     switch (role) {
