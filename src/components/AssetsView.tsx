@@ -1163,6 +1163,7 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
                     onClick={() => {
                       setShowBulkImageModal(false);
                       setBulkReport(null);
+                      onRefresh();
                     }}
                     className="w-full py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold shadow-md transition-colors"
                   >

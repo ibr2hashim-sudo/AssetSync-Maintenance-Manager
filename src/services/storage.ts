@@ -53,11 +53,105 @@ function getItem<T>(key: string, defaultValue: T): T {
   }
 }
 
+// =========================================================================
+// INDEXEDDB DEDICATED IMAGE STORAGE (Supports Unlimited / Gigabytes of High-Res Images)
+// =========================================================================
+const IDB_NAME = 'AssetMgmtImagesDB';
+const IDB_STORE = 'device_images';
+const IDB_VERSION = 1;
+
+function openImageDB(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    if (typeof window === 'undefined' || !window.indexedDB) {
+      reject(new Error('IndexedDB not supported'));
+      return;
+    }
+    const request = indexedDB.open(IDB_NAME, IDB_VERSION);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(IDB_STORE)) {
+        db.createObjectStore(IDB_STORE, { keyPath: 'customId' });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+export async function saveImageToDB(customId: string, base64Data: string): Promise<void> {
+  try {
+    const db = await openImageDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      const store = tx.objectStore(IDB_STORE);
+      store.put({ customId: customId.trim().toLowerCase(), dataUrl: base64Data, updatedAt: Date.now() });
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (e) {
+    console.warn('Fallback saving image in memory/localStorage:', e);
+  }
+}
+
+export async function getImageFromDB(customId: string): Promise<string | null> {
+  try {
+    const db = await openImageDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(IDB_STORE, 'readonly');
+      const store = tx.objectStore(IDB_STORE);
+      const req = store.get(customId.trim().toLowerCase());
+      req.onsuccess = () => {
+        resolve(req.result ? req.result.dataUrl : null);
+      };
+      req.onerror = () => resolve(null);
+    });
+  } catch {
+    return null;
+  }
+}
+
+export async function getAllImagesFromDB(): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  try {
+    const db = await openImageDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(IDB_STORE, 'readonly');
+      const store = tx.objectStore(IDB_STORE);
+      const req = store.getAll();
+      req.onsuccess = () => {
+        if (Array.isArray(req.result)) {
+          req.result.forEach((item) => {
+            if (item.customId && item.dataUrl) {
+              map.set(item.customId, item.dataUrl);
+            }
+          });
+        }
+        resolve(map);
+      };
+      req.onerror = () => resolve(map);
+    });
+  } catch {
+    return map;
+  }
+}
+
 function setItem<T>(key: string, value: T): void {
   try {
     localStorage.setItem(key, JSON.stringify(value));
   } catch (err) {
-    console.error(`Error writing ${key} to storage:`, err);
+    console.warn(`localStorage quota exceeded or error for ${key}:`, err);
+    // If assets array exceeds quota because of legacy base64 images, strip inline images and save
+    if (key === STORAGE_KEYS.ASSETS && Array.isArray(value)) {
+      try {
+        const stripped = value.map((a: Asset) => ({
+          ...a,
+          imageUrl: a.imageUrl && a.imageUrl.startsWith('data:') ? undefined : a.imageUrl,
+        }));
+        localStorage.setItem(key, JSON.stringify(stripped));
+      } catch (innerErr) {
+        console.error('Critical storage write error:', innerErr);
+      }
+    }
   }
 }
 
@@ -729,6 +823,12 @@ export class StorageService {
         assets[assetIdx].imageUrl = base64;
         assets[assetIdx].updatedAt = new Date().toISOString();
         updatedCount++;
+
+        // Also save to IndexedDB asynchronously for robust long term storage
+        saveImageToDB(assets[assetIdx].customId, base64);
+        if (assets[assetIdx].serialNumber && assets[assetIdx].serialNumber !== 'غير محدد') {
+          saveImageToDB(assets[assetIdx].serialNumber, base64);
+        }
 
         report.successful++;
         report.items.push({
