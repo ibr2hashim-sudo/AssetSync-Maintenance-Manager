@@ -185,23 +185,38 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
 
     try {
       const result = await ExcelUtils.parseExcelOrCSV(file, assets);
-      if (result.importedAssets.length > 0) {
-        // Fast atomic batch import (1 write instead of N writes to localStorage)
-        StorageService.batchImportAssets(result.importedAssets);
+      if (result.isComprehensive) {
+        const importRes = StorageService.batchImportComprehensiveData({
+          assets: result.importedAssets,
+          users: result.importedUsers,
+          tickets: result.importedTickets,
+          periodicRecords: result.importedPeriodic,
+        });
         onRefresh();
-      }
 
-      if (result.errorCount === 0) {
         setImportNotice({
           type: 'success',
-          message: `تم استيراد (${result.successCount}) جهاز بنجاح دون أي أخطاء!`,
+          message: `تم استيراد ملف قاعدة البيانات الشامل (6 صفحات) بنجاح: ${importRes.assetsCount} أصل/جهاز، ${importRes.usersCount} مستخدم، ${importRes.ticketsCount} بلاغ صيانة، ${importRes.periodicCount} سجل صيانة دورية!`,
         });
       } else {
-        setImportNotice({
-          type: result.successCount > 0 ? 'success' : 'error',
-          message: `تم استيراد (${result.successCount}) جهاز بنجاح. تعذر استيراد (${result.errorCount}) جهاز لوجود مشاكل في البيانات.`,
-          errors: result.errors,
-        });
+        if (result.importedAssets.length > 0) {
+          // Fast atomic batch import (1 write instead of N writes to localStorage)
+          StorageService.batchImportAssets(result.importedAssets);
+          onRefresh();
+        }
+
+        if (result.errorCount === 0) {
+          setImportNotice({
+            type: 'success',
+            message: `تم استيراد (${result.successCount}) جهاز بنجاح دون أي أخطاء!`,
+          });
+        } else {
+          setImportNotice({
+            type: result.successCount > 0 ? 'success' : 'error',
+            message: `تم استيراد (${result.successCount}) جهاز بنجاح. تعذر استيراد (${result.errorCount}) جهاز لوجود مشاكل في البيانات.`,
+            errors: result.errors,
+          });
+        }
       }
     } catch (err: any) {
       setImportNotice({
@@ -361,11 +376,20 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
               </button>
 
               <button
+                onClick={() => ExcelUtils.exportComprehensiveDatabaseToXLSX(StorageService.getFullDataBackup())}
+                title="تصدير قاعدة بيانات نظام الأصول والصيانة كاملة (6 صفحات Excel)"
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-xs font-bold transition-colors"
+              >
+                <Download className="w-3.5 h-3.5 text-emerald-600" />
+                تصدير قاعدة البيانات (6 صفحات Excel)
+              </button>
+
+              <button
                 onClick={() => ExcelUtils.exportAssetsToCSV(accessibleAssets)}
                 title="تصدير الأصول إلى ملف CSV UTF-8"
                 className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition-colors"
               >
-                <Download className="w-3.5 h-3.5 text-emerald-600" />
+                <Download className="w-3.5 h-3.5 text-slate-600" />
                 تصدير CSV
               </button>
 

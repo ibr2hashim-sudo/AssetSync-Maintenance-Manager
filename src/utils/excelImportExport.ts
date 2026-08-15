@@ -1,11 +1,32 @@
 import * as XLSX from 'xlsx';
-import { Asset, DeviceStatus } from '../types';
+import {
+  Asset,
+  DeviceStatus,
+  User,
+  MaintenanceTicket,
+  PeriodicMaintenanceRecord,
+  HistoryLog,
+} from '../types';
 
 export interface ImportResult {
   successCount: number;
   errorCount: number;
   errors: string[];
   importedAssets: Asset[];
+  importedUsers?: User[];
+  importedTickets?: MaintenanceTicket[];
+  importedPeriodic?: PeriodicMaintenanceRecord[];
+  importedHistory?: HistoryLog[];
+  isComprehensive?: boolean;
+  sheetsFound?: string[];
+}
+
+export interface ComprehensiveDatabaseData {
+  users: User[];
+  assets: Asset[];
+  tickets: MaintenanceTicket[];
+  periodicRecords: PeriodicMaintenanceRecord[];
+  history: HistoryLog[];
 }
 
 export class ExcelUtils {
@@ -20,23 +41,182 @@ export class ExcelUtils {
       .trim();
   }
 
-  // Export Assets to CSV (UTF-8 with BOM for Excel Arabic)
+  // =========================================================================
+  // 1. Export Comprehensive 6-Sheet Workbook (قاعدة بيانات نظام الاصول والصيانة.xlsx)
+  // =========================================================================
+  static exportComprehensiveDatabaseToXLSX(data: ComprehensiveDatabaseData): void {
+    const wb = XLSX.utils.book_new();
+
+    // -----------------------------------------------------------------------
+    // Sheet 1: Users
+    // Username | Password | FullName | Role | Department | Status
+    // -----------------------------------------------------------------------
+    const usersRows = data.users.map((u) => ({
+      Username: u.username,
+      Password: u.password || '123456',
+      FullName: u.fullName,
+      Role: u.role,
+      Department: u.assignedDepartment || 'جميع الأقسام',
+      Status: u.isActive !== false ? 'Active' : 'Inactive',
+    }));
+    const wsUsers = XLSX.utils.json_to_sheet(usersRows);
+    XLSX.utils.book_append_sheet(wb, wsUsers, 'Users');
+
+    // -----------------------------------------------------------------------
+    // Sheet 2: Assests
+    // القسم | القسم الداخلي | Device Name | Code | الكمية | الكمية الدفترية | الفارق | Model | Serial Number | Company | التوابع | مستلم العهدة | Status | Notes | Image URL
+    // -----------------------------------------------------------------------
+    const assetsRows = data.assets.map((a) => {
+      const currentQty = a.currentQuantity ?? 0;
+      const bookQty = a.bookQuantity ?? 0;
+      const diff = currentQty - bookQty;
+
+      return {
+        'القسم': a.mainDepartment || '',
+        'القسم الداخلي': a.subDepartment || a.mainDepartment || '',
+        'Device Name': a.deviceName || '',
+        'Code': a.customId || '',
+        'الكمية': currentQty,
+        'الكمية الدفترية': bookQty,
+        'الفارق': diff,
+        'Model': a.model || '',
+        'Serial Number': a.serialNumber || '',
+        'Company': a.manufacturer || '',
+        'التوابع': (a.accessories || []).join(' + '),
+        'مستلم العهدة': a.custodian || '',
+        'Status': a.status || 'شغال',
+        'Notes': a.notes || '',
+        'Image URL': a.imageUrl || '',
+      };
+    });
+    const wsAssets = XLSX.utils.json_to_sheet(assetsRows);
+    XLSX.utils.book_append_sheet(wb, wsAssets, 'Assests');
+
+    // -----------------------------------------------------------------------
+    // Sheet 3: Maintenance Tickets
+    // Ticket ID | Asset ID | Status (Pending, In_Progress, Completed) | Supervisor Name | Complaint Text | Created At | Received At | Technician Name | Initial Report | Required Parts | Final Report | Completed At | Repair Duration | PDF Link
+    // -----------------------------------------------------------------------
+    const ticketStatusMap: Record<string, string> = {
+      'معلق': 'Pending',
+      'قيد الصيانة': 'In_Progress',
+      'تم الصيانة': 'Completed',
+    };
+
+    const ticketsRows = data.tickets.map((t) => ({
+      'Ticket ID': t.ticketNumber || t.id,
+      'Asset ID': t.customId || t.assetId || '',
+      'Status': ticketStatusMap[t.status] || t.status || 'Pending',
+      'Supervisor Name': t.submittedBy?.userName || '',
+      'Complaint Text': t.complaintDescription || '',
+      'Created At': `${t.complaintDate || ''} ${t.complaintTime || ''}`.trim(),
+      'Received At': t.receivedAt || '',
+      'Technician Name': t.receivedBy || t.completedBy || '',
+      'Initial Report': t.initialReport || '',
+      'Required Parts': t.requiredParts || '',
+      'Final Report': t.finalReport || '',
+      'Completed At': t.completedAt || '',
+      'Repair Duration': t.repairDuration || '',
+      'PDF Link': '',
+    }));
+    const wsTickets = XLSX.utils.json_to_sheet(ticketsRows);
+    XLSX.utils.book_append_sheet(wb, wsTickets, 'Maintenance Tickets');
+
+    // -----------------------------------------------------------------------
+    // Sheet 4: Preventive Maintenance
+    // Type (AC, Oil, Battery) | Asset ID | Last Service Date | Current Reading | Next Reading | Next Service Date | Notes
+    // -----------------------------------------------------------------------
+    const periodicRows = data.periodicRecords.map((p) => {
+      let typeLabel = p.category;
+      if (p.category === 'التكييف') typeLabel = 'AC';
+      else if (p.category === 'الزيوت والفلاتر') typeLabel = 'Oil';
+      else if (p.category === 'البطاريات') typeLabel = 'Battery';
+
+      return {
+        'Type': typeLabel,
+        'Asset ID': p.customId || p.assetId || p.deviceName || '',
+        'Last Service Date': p.maintenanceDate || p.batteryChangeDate || '',
+        'Current Reading': p.currentMeterReading ?? '',
+        'Next Reading': p.nextMeterReading ?? '',
+        'Next Service Date': p.nextExpectedChangeDate || '',
+        'Notes': p.notes || p.workDone || '',
+      };
+    });
+    const wsPeriodic = XLSX.utils.json_to_sheet(periodicRows);
+    XLSX.utils.book_append_sheet(wb, wsPeriodic, 'Preventive Maintenance');
+
+    // -----------------------------------------------------------------------
+    // Sheet 5: Activity Logs (History)
+    // Timestamp | User | Action | Details
+    // -----------------------------------------------------------------------
+    const historyRows = data.history.map((h) => ({
+      Timestamp: h.timestamp ? new Date(h.timestamp).toLocaleString('ar-EG') : '',
+      User: `${h.performedBy} (${h.userRole})`,
+      Action: h.action,
+      Details: h.details,
+    }));
+    const wsHistory = XLSX.utils.json_to_sheet(historyRows);
+    XLSX.utils.book_append_sheet(wb, wsHistory, 'Activity Logs (History)');
+
+    // -----------------------------------------------------------------------
+    // Sheet 6: Stats (Read-Only)
+    // -----------------------------------------------------------------------
+    const totalAssets = data.assets.length;
+    const workingAssets = data.assets.filter((a) => a.status === 'شغال').length;
+    const faultyAssets = data.assets.filter((a) => a.status === 'عاطل').length;
+    const damagedAssets = data.assets.filter((a) => a.status === 'تالف').length;
+    const totalCurrentQty = data.assets.reduce((sum, a) => sum + (a.currentQuantity || 0), 0);
+    const totalBookQty = data.assets.reduce((sum, a) => sum + (a.bookQuantity || 0), 0);
+    const totalDifference = totalCurrentQty - totalBookQty;
+
+    const totalTickets = data.tickets.length;
+    const pendingTickets = data.tickets.filter((t) => t.status === 'معلق').length;
+    const inProgressTickets = data.tickets.filter((t) => t.status === 'قيد الصيانة').length;
+    const completedTickets = data.tickets.filter((t) => t.status === 'تم الصيانة').length;
+
+    const statsRows = [
+      { 'المؤشر الإحصائي (Metric)': 'إجمالي الأجهزة والعهد الطبية المسجلة', 'القيمة (Value)': totalAssets },
+      { 'المؤشر الإحصائي (Metric)': 'الأجهزة الشغالة (Working)', 'القيمة (Value)': workingAssets },
+      { 'المؤشر الإحصائي (Metric)': 'الأجهزة العاطلة (Faulty)', 'القيمة (Value)': faultyAssets },
+      { 'المؤشر الإحصائي (Metric)': 'الأجهزة التالفة (Damaged)', 'القيمة (Value)': damagedAssets },
+      { 'المؤشر الإحصائي (Metric)': 'إجمالي الكمية الفعلية الحالية', 'القيمة (Value)': totalCurrentQty },
+      { 'المؤشر الإحصائي (Metric)': 'إجمالي الكمية الدفترية', 'القيمة (Value)': totalBookQty },
+      { 'المؤشر الإحصائي (Metric)': 'الفارق الإجمالي للعهد', 'القيمة (Value)': totalDifference },
+      { 'المؤشر الإحصائي (Metric)': 'إجمالي بلاغات الصيانة', 'القيمة (Value)': totalTickets },
+      { 'المؤشر الإحصائي (Metric)': 'بلاغات معلقة (Pending)', 'القيمة (Value)': pendingTickets },
+      { 'المؤشر الإحصائي (Metric)': 'بلاغات قيد الصيانة (In Progress)', 'القيمة (Value)': inProgressTickets },
+      { 'المؤشر الإحصائي (Metric)': 'بلاغات مكتملة (Completed)', 'القيمة (Value)': completedTickets },
+      { 'المؤشر الإحصائي (Metric)': 'سجلات الصيانة الدورية (Preventive)', 'القيمة (Value)': data.periodicRecords.length },
+      { 'المؤشر الإحصائي (Metric)': 'إجمالي المستخدمين والمشرفين والفنيين', 'القيمة (Value)': data.users.length },
+      { 'المؤشر الإحصائي (Metric)': 'تاريخ استخراج التقرير', 'القيمة (Value)': new Date().toLocaleString('ar-EG') },
+    ];
+    const wsStats = XLSX.utils.json_to_sheet(statsRows);
+    XLSX.utils.book_append_sheet(wb, wsStats, 'Stats');
+
+    // Generate binary and download
+    const fileName = `قاعدة بيانات نظام الاصول والصيانة.xlsx`;
+    XLSX.writeFile(wb, fileName);
+  }
+
+  // =========================================================================
+  // 2. Export Assets Only to CSV
+  // =========================================================================
   static exportAssetsToCSV(assets: Asset[]): void {
     const headers = [
-      'القسم الرئيسي',
-      'القسم الفرعي',
-      'اسم الجهاز',
-      'ID مخصص للجهاز',
-      'الكمية الحالية',
+      'القسم',
+      'القسم الداخلي',
+      'Device Name',
+      'Code',
+      'الكمية',
       'الكمية الدفترية',
       'الفارق',
-      'موديل الجهاز',
-      'الرقم التسلسلي (Serial Number)',
-      'اسم الشركة المصنعة',
+      'Model',
+      'Serial Number',
+      'Company',
       'التوابع',
-      'حالة الجهاز',
       'مستلم العهدة',
-      'ملاحظات',
+      'Status',
+      'Notes',
+      'Image URL',
     ];
 
     const rows = assets.map((a) => [
@@ -46,14 +226,15 @@ export class ExcelUtils {
       `"${(a.customId || '').replace(/"/g, '""')}"`,
       a.currentQuantity ?? 0,
       a.bookQuantity ?? 0,
-      a.difference ?? 0,
+      (a.currentQuantity ?? 0) - (a.bookQuantity ?? 0),
       `"${(a.model || '').replace(/"/g, '""')}"`,
       `"${(a.serialNumber || '').replace(/"/g, '""')}"`,
       `"${(a.manufacturer || '').replace(/"/g, '""')}"`,
       `"${(a.accessories || []).join(' + ').replace(/"/g, '""')}"`,
-      `"${(a.status || 'شغال').replace(/"/g, '""')}"`,
       `"${(a.custodian || '').replace(/"/g, '""')}"`,
+      `"${(a.status || 'شغال').replace(/"/g, '""')}"`,
       `"${(a.notes || '').replace(/"/g, '""')}"`,
+      `"${(a.imageUrl || '').replace(/"/g, '""')}"`,
     ]);
 
     const csvContent = '\uFEFF' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\r\n');
@@ -69,311 +250,489 @@ export class ExcelUtils {
     URL.revokeObjectURL(url);
   }
 
-  // Export to standard Excel (.xlsx)
-  static exportAssetsToXLSX(assets: Asset[]): void {
-    const data = assets.map((a) => ({
-      'القسم الرئيسي': a.mainDepartment,
-      'القسم الفرعي': a.subDepartment,
-      'اسم الجهاز': a.deviceName,
-      'ID مخصص للجهاز': a.customId,
-      'الكمية الحالية': a.currentQuantity,
-      'الكمية الدفترية': a.bookQuantity,
-      'الفارق': a.difference,
-      'موديل الجهاز': a.model,
-      'الرقم التسلسلي (Serial Number)': a.serialNumber,
-      'اسم الشركة المصنعة': a.manufacturer,
-      'التوابع': (a.accessories || []).join(' + '),
-      'حالة الجهاز': a.status,
-      'مستلم العهدة': a.custodian,
-      'ملاحظات': a.notes,
-    }));
-
-    const ws = XLSX.utils.json_to_sheet(data);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'الأصول والعهد');
-    const dateStr = new Date().toISOString().split('T')[0];
-    XLSX.writeFile(wb, `سجل_الأصول_والعهد_${dateStr}.xlsx`);
-  }
-
-  // Parse Excel / CSV File with Smart Arabic and English Column Mapping
+  // =========================================================================
+  // 3. Smart Multi-Sheet and Single-Sheet Parser
+  // =========================================================================
   static async parseExcelOrCSV(file: File, existingAssets: Asset[]): Promise<ImportResult> {
     const buffer = await file.arrayBuffer();
     const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
-    const firstSheetName = workbook.SheetNames[0];
-    const sheet = workbook.Sheets[firstSheetName];
-    const rows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+    const sheetNames = workbook.SheetNames;
 
     const result: ImportResult = {
       successCount: 0,
       errorCount: 0,
       errors: [],
       importedAssets: [],
+      importedUsers: [],
+      importedTickets: [],
+      importedPeriodic: [],
+      importedHistory: [],
+      isComprehensive: false,
+      sheetsFound: sheetNames,
     };
 
-    const existingIds = new Set(existingAssets.map((a) => a.customId.trim().toLowerCase()));
-    const batchNewIds = new Set<string>();
+    // Check if workbook contains multi-sheet database structure
+    const hasUsersSheet = sheetNames.some((n) => ExcelUtils.normalizeKey(n) === 'users' || ExcelUtils.normalizeKey(n) === 'المستخدمين');
+    const hasAssetsSheet = sheetNames.some(
+      (n) =>
+        ExcelUtils.normalizeKey(n) === 'assests' ||
+        ExcelUtils.normalizeKey(n) === 'assets' ||
+        ExcelUtils.normalizeKey(n) === 'الاصول' ||
+        ExcelUtils.normalizeKey(n) === 'العهدولاصول' ||
+        ExcelUtils.normalizeKey(n) === 'الاجهزه'
+    );
+    const hasTicketsSheet = sheetNames.some(
+      (n) =>
+        ExcelUtils.normalizeKey(n).includes('ticket') ||
+        ExcelUtils.normalizeKey(n).includes('صيانه') ||
+        ExcelUtils.normalizeKey(n).includes('بلاغات')
+    );
+    const hasPeriodicSheet = sheetNames.some(
+      (n) =>
+        ExcelUtils.normalizeKey(n).includes('preventive') ||
+        ExcelUtils.normalizeKey(n).includes('دوريه') ||
+        ExcelUtils.normalizeKey(n).includes('periodic')
+    );
 
-    rows.forEach((row, idx) => {
-      const rowNumber = idx + 2; // header is row 1
+    if (hasUsersSheet || hasAssetsSheet || hasTicketsSheet || hasPeriodicSheet) {
+      result.isComprehensive = true;
+    }
 
-      // Find values using flexible keys
-      let mainDept = '';
-      let subDept = '';
-      let deviceName = '';
-      let customId = '';
-      let currentQty = 0;
-      let bookQty = 0;
-      let model = '';
-      let serialNumber = '';
-      let manufacturer = '';
-      let accessoriesStr = '';
-      let statusStr = 'شغال';
-      let custodian = '';
-      let notes = '';
+    // -------------------------------------------------------------------------
+    // A. Parse Assets Sheet (or First Sheet)
+    // -------------------------------------------------------------------------
+    let assetSheetName = sheetNames.find(
+      (n) =>
+        ExcelUtils.normalizeKey(n) === 'assests' ||
+        ExcelUtils.normalizeKey(n) === 'assets' ||
+        ExcelUtils.normalizeKey(n) === 'الاصول' ||
+        ExcelUtils.normalizeKey(n) === 'الاجهزه'
+    );
+    if (!assetSheetName) {
+      assetSheetName = sheetNames[0];
+    }
 
-      Object.entries(row).forEach(([colName, colVal]) => {
-        const val = String(colVal ?? '').trim();
-        const normCol = ExcelUtils.normalizeKey(colName);
+    const assetSheet = workbook.Sheets[assetSheetName];
+    if (assetSheet) {
+      const rows: any[] = XLSX.utils.sheet_to_json(assetSheet, { defval: '' });
+      const existingIds = new Set(existingAssets.map((a) => a.customId.trim().toLowerCase()));
+      const batchNewIds = new Set<string>();
 
-        // القسم الرئيسي: القسم / القسم الرئيسي / الإدارة / المبنى / المركز / department / maindepartment / clinic
-        if (
-          normCol === 'القسمالرئيسي' ||
-          normCol === 'القسم' ||
-          normCol === 'الاداره' ||
-          normCol === 'المبني' ||
-          normCol === 'المركز' ||
-          normCol === 'department' ||
-          normCol === 'maindepartment' ||
-          normCol === 'dept'
-        ) {
-          mainDept = val;
-        }
-        // القسم الفرعي: القسم الفرعي / القسم الداخلي / العيادة / الغرفة / الوحدة / الدور / الجناح / subdepartment / subdept / room / clinic
-        else if (
-          normCol === 'القسمالفرعي' ||
-          normCol === 'القسمالداخلي' ||
-          normCol === 'العياده' ||
-          normCol === 'اسم العياده' ||
-          normCol === 'اسمالعياده' ||
-          normCol === 'الغرفه' ||
-          normCol === 'اسمالغرفه' ||
-          normCol === 'الوحده' ||
-          normCol === 'الدور' ||
-          normCol === 'الجناح' ||
-          normCol === 'subdepartment' ||
-          normCol === 'subdept' ||
-          normCol === 'internaldepartment' ||
-          normCol === 'room' ||
-          normCol === 'clinic'
-        ) {
-          subDept = val;
-        }
-        // موقع / مكان / جهة الجهاز: إذا كان العمود يحتوي على الموقع مثل "العيادات / عيادة العظام"
-        else if (
-          normCol === 'الموقع' ||
-          normCol === 'المكان' ||
-          normCol === 'الجهه' ||
-          normCol === 'location' ||
-          normCol === 'place'
-        ) {
-          if (!mainDept && !subDept) {
+      rows.forEach((row, idx) => {
+        const rowNumber = idx + 2;
+
+        let mainDept = '';
+        let subDept = '';
+        let deviceName = '';
+        let customId = '';
+        let currentQty = 0;
+        let bookQty = 0;
+        let model = '';
+        let serialNumber = '';
+        let manufacturer = '';
+        let accessoriesStr = '';
+        let statusStr = 'شغال';
+        let custodian = '';
+        let notes = '';
+        let imageUrl = '';
+
+        Object.entries(row).forEach(([colName, colVal]) => {
+          const val = String(colVal ?? '').trim();
+          const normCol = ExcelUtils.normalizeKey(colName);
+
+          // القسم: القسم / القسم الرئيسي / department / maindepartment
+          if (
+            normCol === 'القسم' ||
+            normCol === 'القسمالرئيسي' ||
+            normCol === 'department' ||
+            normCol === 'maindepartment' ||
+            normCol === 'dept'
+          ) {
             mainDept = val;
-          } else if (!subDept) {
+          }
+          // القسم الداخلي: القسم الداخلي / القسم الفرعي / subdepartment / internaldepartment / clinic / room
+          else if (
+            normCol === 'القسمالداخلي' ||
+            normCol === 'القسمالفرعي' ||
+            normCol === 'subdepartment' ||
+            normCol === 'subdept' ||
+            normCol === 'internaldepartment' ||
+            normCol === 'العياده' ||
+            normCol === 'الغرفه'
+          ) {
             subDept = val;
           }
+          // Device Name: اسم الجهاز / الجهاز / البيان / الصنف / devicename / item / name
+          else if (
+            normCol === 'devicename' ||
+            normCol === 'اسمالجهاز' ||
+            normCol === 'الجهاز' ||
+            normCol === 'البيان' ||
+            normCol === 'الصنف' ||
+            normCol === 'الوصف' ||
+            normCol === 'name' ||
+            normCol === 'item'
+          ) {
+            deviceName = val;
+          }
+          // Code / Asset ID: Code / كود / ID / customid / barcode / كودالجهاز
+          else if (
+            normCol === 'code' ||
+            normCol === 'id' ||
+            normCol === 'customid' ||
+            normCol === 'assetid' ||
+            normCol === 'كود' ||
+            normCol === 'كودالجهاز' ||
+            normCol === 'الرقمالتعريفي' ||
+            normCol === 'باركود'
+          ) {
+            customId = val;
+          }
+          // الكمية: الكمية / الكمية الحالية / quantity / currentquantity / qty
+          else if (
+            normCol === 'الكميه' ||
+            normCol === 'الكميهالحاليه' ||
+            normCol === 'quantity' ||
+            normCol === 'currentquantity' ||
+            normCol === 'qty'
+          ) {
+            currentQty = Number(val) || 0;
+          }
+          // الكمية الدفترية: الكمية الدفترية / bookquantity
+          else if (
+            normCol === 'الكميهالدفتريه' ||
+            normCol === 'bookquantity' ||
+            normCol === 'الكميهالسابقه'
+          ) {
+            bookQty = Number(val) || 0;
+          }
+          // Model: Model / موديل / موديل الجهاز / devicemodel
+          else if (
+            normCol === 'model' ||
+            normCol === 'الموديل' ||
+            normCol === 'موديلالجهاز'
+          ) {
+            model = val;
+          }
+          // Serial Number: Serial Number / الرقم التسلسلي / sn / serial
+          else if (
+            normCol === 'serialnumber' ||
+            normCol === 'sn' ||
+            normCol === 'الرقمالتسلسلي' ||
+            normCol === 'serial'
+          ) {
+            serialNumber = val;
+          }
+          // Company / Manufacturer: Company / الشركة / اسم الشركة المصنعة / manufacturer / brand
+          else if (
+            normCol === 'company' ||
+            normCol === 'الشركه' ||
+            normCol === 'الشركهالمصنعه' ||
+            normCol === 'اسمالشركهالمصنعه' ||
+            normCol === 'manufacturer' ||
+            normCol === 'brand'
+          ) {
+            manufacturer = val;
+          }
+          // التوابع: التوابع / accessories / accessory
+          else if (normCol === 'التوابع' || normCol === 'accessories' || normCol === 'accessory') {
+            accessoriesStr = val;
+          }
+          // مستلم العهدة: مستلم العهدة / custodian / receiver
+          else if (normCol === 'مستلمالعهده' || normCol === 'custodian' || normCol === 'receiver') {
+            custodian = val;
+          }
+          // Status: Status / حالة الجهاز / الحالة / state
+          else if (normCol === 'status' || normCol === 'حالهالجهاز' || normCol === 'الحاله' || normCol === 'state') {
+            statusStr = val;
+          }
+          // Notes: Notes / ملاحظات / remarks / note
+          else if (normCol === 'notes' || normCol === 'ملاحظات' || normCol === 'note') {
+            notes = val;
+          }
+          // Image URL: Image URL / رابط الصورة / صورة الجهاز / image / imageurl
+          else if (
+            normCol === 'imageurl' ||
+            normCol === 'image' ||
+            normCol === 'رابطالصوره' ||
+            normCol === 'صورهالجهاز' ||
+            normCol === 'photo'
+          ) {
+            imageUrl = val;
+          }
+        });
+
+        if (!deviceName) {
+          result.errorCount++;
+          result.errors.push(`السطر ${rowNumber} في صفحة الأصول: اسم الجهاز مفقود`);
+          return;
         }
-        // اسم الجهاز: اسم الجهاز / اسم الأصل / البيان / الوصف / الصنف / الجهاز / devicename / name / assetname / item / description
-        else if (
-          normCol === 'اسمالجهاز' ||
-          normCol === 'اسمالاصل' ||
-          normCol === 'الجهاز' ||
-          normCol === 'البيان' ||
-          normCol === 'الصنف' ||
-          normCol === 'الوصف' ||
-          normCol === 'اسمالصنف' ||
-          normCol === 'devicename' ||
-          normCol === 'assetname' ||
-          normCol === 'device' ||
-          normCol === 'item' ||
-          normCol === 'description' ||
-          normCol === 'name'
+
+        if (!mainDept && subDept) mainDept = subDept;
+        if (!mainDept) mainDept = 'عام';
+        if (!subDept) subDept = mainDept;
+
+        if (!customId) {
+          customId = `DEV-${Date.now().toString().slice(-4)}${Math.floor(Math.random() * 900 + 100)}`;
+        }
+
+        const cleanCustomId = customId.trim();
+        const lowerCustomId = cleanCustomId.toLowerCase();
+
+        if (existingIds.has(lowerCustomId) || batchNewIds.has(lowerCustomId)) {
+          customId = `${cleanCustomId}-${Math.floor(Math.random() * 900 + 100)}`;
+        }
+
+        const finalCustomId = customId.trim();
+        batchNewIds.add(finalCustomId.toLowerCase());
+
+        let accessoriesList: string[] = [];
+        if (accessoriesStr) {
+          accessoriesList = accessoriesStr
+            .split(/[+,/؛;]/)
+            .map((s) => s.trim())
+            .filter(Boolean);
+        }
+
+        let finalStatus: DeviceStatus = 'شغال';
+        if (
+          statusStr.includes('عاطل') ||
+          statusStr.toLowerCase().includes('faulty') ||
+          statusStr.toLowerCase().includes('broken')
         ) {
-          deviceName = val;
-        }
-        // ID مخصص للجهاز: كود الجهاز / الرقم التعريفي / الباركود / المسلسل / ID / customid / deviceid / assetid / code / tag / barcode
-        else if (
-          normCol === 'idمخصصللجهاز' ||
-          normCol === 'كودالجهاز' ||
-          normCol === 'الرقمالتعريفي' ||
-          normCol === 'كود' ||
-          normCol === 'رمزالجهاز' ||
-          normCol === 'الباركود' ||
-          normCol === 'باركود' ||
-          normCol === 'id' ||
-          normCol === 'customid' ||
-          normCol === 'deviceid' ||
-          normCol === 'assetid' ||
-          normCol === 'code' ||
-          normCol === 'tag' ||
-          normCol === 'tagno' ||
-          normCol === 'assetno' ||
-          normCol === 'barcode' ||
-          normCol === 'رقمكودالجهاز'
+          finalStatus = 'عاطل';
+        } else if (
+          statusStr.includes('تالف') ||
+          statusStr.toLowerCase().includes('damage') ||
+          statusStr.toLowerCase().includes('scrap')
         ) {
-          customId = val;
+          finalStatus = 'تالف';
         }
-        // الكمية الحالية: الكمية الحالية / الكمية / quantity / currentquantity / qty
-        else if (
-          normCol === 'الكميهالحاليه' ||
-          normCol === 'الكميه' ||
-          normCol === 'quantity' ||
-          normCol === 'currentquantity' ||
-          normCol === 'qty'
-        ) {
-          currentQty = Number(val) || 0;
-        }
-        // الكمية الدفترية: الكمية الدفترية / الكمية السابقة / bookquantity / previousquantity
-        else if (
-          normCol === 'الكميهالدفتريه' ||
-          normCol === 'الكميهالسابقه' ||
-          normCol === 'bookquantity' ||
-          normCol === 'previousquantity'
-        ) {
-          bookQty = Number(val) || 0;
-        }
-        // موديل الجهاز: موديل الجهاز / الموديل / model / devicemodel
-        else if (normCol === 'موديلالجهاز' || normCol === 'الموديل' || normCol === 'model' || normCol === 'devicemodel') {
-          model = val;
-        }
-        // الرقم التسلسلي: الرقم التسلسلي / serialnumber / sn / serial
-        else if (
-          normCol === 'الرقمالتسلسلي' ||
-          normCol === 'serialnumber' ||
-          normCol === 'sn' ||
-          normCol === 'serial' ||
-          normCol === 'الرقمالتسلسليserialnumber'
-        ) {
-          serialNumber = val;
-        }
-        // اسم الشركة المصنعة: اسم الشركة / الشركة المصنعة / manufacturer / company / brand
-        else if (
-          normCol === 'اسمالشركه' ||
-          normCol === 'الشركهالمصنعه' ||
-          normCol === 'manufacturer' ||
-          normCol === 'company' ||
-          normCol === 'brand' ||
-          normCol === 'اسمالشركهالمصنعه'
-        ) {
-          manufacturer = val;
-        }
-        // التوابع: التوابع / accessories / accessory
-        else if (normCol === 'التوابع' || normCol === 'accessories' || normCol === 'accessory') {
-          accessoriesStr = val;
-        }
-        // حالة الجهاز: حالة الجهاز / status / state
-        else if (normCol === 'حالهالجهاز' || normCol === 'status' || normCol === 'state' || normCol === 'الحاله') {
-          statusStr = val;
-        }
-        // مستلم العهدة: مستلم العهدة / custodian / receiver
-        else if (normCol === 'مستلمالعهده' || normCol === 'custodian' || normCol === 'receiver') {
-          custodian = val;
-        }
-        // ملاحظات: ملاحظات / notes / note / remarks
-        else if (normCol === 'ملاحظات' || normCol === 'notes' || normCol === 'note' || normCol === 'remarks') {
-          notes = val;
+
+        const diff = currentQty - bookQty;
+        const now = new Date().toISOString();
+
+        const newAsset: Asset = {
+          id: `asset-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
+          mainDepartment: mainDept,
+          subDepartment: subDept,
+          deviceName: deviceName,
+          customId: finalCustomId,
+          currentQuantity: currentQty,
+          bookQuantity: bookQty,
+          difference: diff,
+          model: model || 'غير محدد',
+          serialNumber: serialNumber || 'غير محدد',
+          manufacturer: manufacturer || 'غير محدد',
+          accessories: accessoriesList,
+          status: finalStatus,
+          custodian: custodian || 'غير مسجل',
+          notes: notes || '',
+          imageUrl: imageUrl || '',
+          createdAt: now,
+          updatedAt: now,
+        };
+
+        result.importedAssets.push(newAsset);
+        result.successCount++;
+      });
+    }
+
+    // -------------------------------------------------------------------------
+    // B. Parse Users Sheet
+    // -------------------------------------------------------------------------
+    const usersSheetName = sheetNames.find(
+      (n) => ExcelUtils.normalizeKey(n) === 'users' || ExcelUtils.normalizeKey(n) === 'المستخدمين'
+    );
+    if (usersSheetName && workbook.Sheets[usersSheetName]) {
+      const uRows: any[] = XLSX.utils.sheet_to_json(workbook.Sheets[usersSheetName], { defval: '' });
+      uRows.forEach((row) => {
+        let username = '';
+        let password = '';
+        let fullName = '';
+        let role = 'supervisor';
+        let dept = '';
+        let status = 'Active';
+
+        Object.entries(row).forEach(([col, val]) => {
+          const v = String(val ?? '').trim();
+          const nc = ExcelUtils.normalizeKey(col);
+          if (nc === 'username' || nc === 'اسمالمستخدم') username = v;
+          else if (nc === 'password' || nc === 'كلمهالمرور') password = v;
+          else if (nc === 'fullname' || nc === 'الاسمالكامل' || nc === 'الاسم') fullName = v;
+          else if (nc === 'role' || nc === 'الدور' || nc === 'الصلاحيه') role = v.toLowerCase();
+          else if (nc === 'department' || nc === 'القسم') dept = v;
+          else if (nc === 'status' || nc === 'الحاله') status = v;
+        });
+
+        if (username) {
+          let cleanRole: any = 'supervisor';
+          if (role.includes('admin') || role.includes('مدير') || role.includes('ادمن')) cleanRole = 'admin';
+          else if (role.includes('tech') || role.includes('فني')) cleanRole = 'technician';
+
+          result.importedUsers?.push({
+            id: `usr-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+            username: username.toLowerCase(),
+            password: password || '123456',
+            fullName: fullName || username,
+            role: cleanRole,
+            assignedDepartment: dept && dept !== 'جميع الأقسام' ? dept : undefined,
+            createdAt: new Date().toISOString(),
+            isActive: !status.toLowerCase().includes('inact') && !status.includes('معطل'),
+          });
         }
       });
+    }
 
-      // Validation
-      if (!deviceName) {
-        result.errorCount++;
-        result.errors.push(`السطر ${rowNumber}: حقل اسم الجهاز (أو البيان / الصنف) مفقود في ملف الإكسل`);
-        return;
-      }
+    // -------------------------------------------------------------------------
+    // C. Parse Maintenance Tickets Sheet
+    // -------------------------------------------------------------------------
+    const ticketsSheetName = sheetNames.find(
+      (n) =>
+        ExcelUtils.normalizeKey(n).includes('ticket') ||
+        ExcelUtils.normalizeKey(n).includes('صيانه') ||
+        ExcelUtils.normalizeKey(n).includes('بلاغات')
+    );
+    if (ticketsSheetName && workbook.Sheets[ticketsSheetName]) {
+      const tRows: any[] = XLSX.utils.sheet_to_json(workbook.Sheets[ticketsSheetName], { defval: '' });
+      tRows.forEach((row) => {
+        let ticketId = '';
+        let assetId = '';
+        let status = 'معلق';
+        let supervisor = '';
+        let complaint = '';
+        let createdAt = '';
+        let receivedAt = '';
+        let techName = '';
+        let initialRep = '';
+        let reqParts = '';
+        let finalRep = '';
+        let completedAt = '';
+        let repairDuration = '';
 
-      if (!mainDept && subDept) {
-        mainDept = subDept;
-      }
+        Object.entries(row).forEach(([col, val]) => {
+          const v = String(val ?? '').trim();
+          const nc = ExcelUtils.normalizeKey(col);
+          if (nc === 'ticketid' || nc === 'رقمالبلاغ' || nc === 'id') ticketId = v;
+          else if (nc === 'assetid' || nc === 'كودالجهاز' || nc === 'idالجهاز') assetId = v;
+          else if (nc === 'status' || nc === 'الحاله') status = v;
+          else if (nc === 'supervisorname' || nc === 'مشرفالقسم') supervisor = v;
+          else if (nc === 'complainttext' || nc === 'نصالشكوي' || nc === 'وصفالعطل') complaint = v;
+          else if (nc === 'createdat' || nc === 'تاريخالانشاء') createdAt = v;
+          else if (nc === 'receivedat' || nc === 'تاريخالاستلام') receivedAt = v;
+          else if (nc === 'technicianname' || nc === 'اسمالفني') techName = v;
+          else if (nc === 'initialreport' || nc === 'التقريرالمبدئي') initialRep = v;
+          else if (nc === 'requiredparts' || nc === 'القطعالمطلوبه') reqParts = v;
+          else if (nc === 'finalreport' || nc === 'التقريرالنهائي') finalRep = v;
+          else if (nc === 'completedat' || nc === 'تاريخالاكتمال') completedAt = v;
+          else if (nc === 'repairduration' || nc === 'مدهالاصلاح') repairDuration = v;
+        });
 
-      // If mainDept contains a delimiter like "العيادات / عيادة القلب" or "العيادات - باطنة"
-      if (mainDept && (!subDept || subDept === mainDept)) {
-        if (mainDept.includes('/') || mainDept.includes('-') || mainDept.includes('–') || mainDept.includes('\\')) {
-          const parts = mainDept.split(/[/\\–-]/).map((p) => p.trim()).filter(Boolean);
-          if (parts.length >= 2) {
-            mainDept = parts[0];
-            subDept = parts.slice(1).join(' - ');
-          }
+        if (assetId || complaint) {
+          let finalStatus: any = 'معلق';
+          const sLower = status.toLowerCase();
+          if (sLower.includes('in_progress') || status.includes('قيد')) finalStatus = 'قيد الصيانة';
+          else if (sLower.includes('completed') || status.includes('تم')) finalStatus = 'تم الصيانة';
+
+          const matchingAsset = result.importedAssets.find(
+            (a) => a.customId === assetId || a.id === assetId
+          );
+
+          result.importedTickets?.push({
+            id: `ticket-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+            ticketNumber: ticketId || `TKT-${Math.floor(Math.random() * 9000 + 1000)}`,
+            assetId: matchingAsset?.id || assetId,
+            customId: assetId,
+            deviceName: matchingAsset?.deviceName || 'جهاز طبي',
+            mainDepartment: matchingAsset?.mainDepartment || 'عام',
+            subDepartment: matchingAsset?.subDepartment || 'عام',
+            model: matchingAsset?.model || '',
+            serialNumber: matchingAsset?.serialNumber || '',
+            complaintDate: createdAt ? createdAt.split(' ')[0] : new Date().toISOString().split('T')[0],
+            complaintTime: createdAt ? createdAt.split(' ')[1] || '' : '12:00 م',
+            complaintDescription: complaint || 'بلاغ صيانة مسجل من الإكسل',
+            submittedBy: {
+              userId: 'imported',
+              userName: supervisor || 'مشرف القسم',
+              role: 'supervisor',
+            },
+            status: finalStatus,
+            receivedAt: receivedAt || undefined,
+            receivedBy: techName || undefined,
+            initialReport: initialRep || undefined,
+            requiredParts: reqParts || undefined,
+            finalReport: finalRep || undefined,
+            completedAt: completedAt || undefined,
+            completedBy: finalStatus === 'تم الصيانة' ? techName : undefined,
+            repairDuration: repairDuration || undefined,
+            updatedAt: new Date().toISOString(),
+          });
         }
-      }
+      });
+    }
 
-      if (!mainDept) {
-        mainDept = 'عام';
-      }
+    // -------------------------------------------------------------------------
+    // D. Parse Preventive Maintenance Sheet
+    // -------------------------------------------------------------------------
+    const prevSheetName = sheetNames.find(
+      (n) =>
+        ExcelUtils.normalizeKey(n).includes('preventive') ||
+        ExcelUtils.normalizeKey(n).includes('دوريه') ||
+        ExcelUtils.normalizeKey(n).includes('periodic')
+    );
+    if (prevSheetName && workbook.Sheets[prevSheetName]) {
+      const pRows: any[] = XLSX.utils.sheet_to_json(workbook.Sheets[prevSheetName], { defval: '' });
+      pRows.forEach((row) => {
+        let type = 'التكييف';
+        let assetId = '';
+        let lastDate = '';
+        let curReading = 0;
+        let nextReading = 0;
+        let nextDate = '';
+        let notes = '';
 
-      if (!subDept) {
-        subDept = mainDept;
-      }
+        Object.entries(row).forEach(([col, val]) => {
+          const v = String(val ?? '').trim();
+          const nc = ExcelUtils.normalizeKey(col);
+          if (nc === 'type' || nc === 'النوع' || nc === 'نوعالصيانه') type = v;
+          else if (nc === 'assetid' || nc === 'كودالجهاز' || nc === 'id') assetId = v;
+          else if (nc === 'lastservicedate' || nc === 'تاريخاخرصيانه') lastDate = v;
+          else if (nc === 'currentreading' || nc === 'القراءهالحاليه') curReading = Number(v) || 0;
+          else if (nc === 'nextreading' || nc === 'القراءهالقادمه') nextReading = Number(v) || 0;
+          else if (nc === 'nextservicedate' || nc === 'تاريخالصيانهالقادم') nextDate = v;
+          else if (nc === 'notes' || nc === 'ملاحظات') notes = v;
+        });
 
-      // If customId is empty, auto-generate a smart ID
-      if (!customId) {
-        customId = `DEV-${Date.now().toString().slice(-4)}${Math.floor(Math.random() * 900 + 100)}`;
-      }
+        let cleanCat = type;
+        if (type.toUpperCase() === 'AC' || type.includes('تكييف')) cleanCat = 'التكييف';
+        else if (type.toUpperCase() === 'OIL' || type.includes('زيت') || type.includes('فلتر')) cleanCat = 'الزيوت والفلاتر';
+        else if (type.toUpperCase() === 'BATTERY' || type.includes('بطار')) cleanCat = 'البطاريات';
 
-      const cleanCustomId = customId.trim();
-      const lowerCustomId = cleanCustomId.toLowerCase();
+        const matchingAsset = result.importedAssets.find(
+          (a) => a.customId === assetId || a.id === assetId
+        );
 
-      if (existingIds.has(lowerCustomId) || batchNewIds.has(lowerCustomId)) {
-        // If duplicated in existing or batch, add auto suffix to avoid collision
-        const uniqueCustomId = `${cleanCustomId}-${Math.floor(Math.random() * 900 + 100)}`;
-        customId = uniqueCustomId;
-      }
-
-      const finalCustomId = customId.trim();
-      batchNewIds.add(finalCustomId.toLowerCase());
-
-      // Parse accessories
-      let accessoriesList: string[] = [];
-      if (accessoriesStr) {
-        accessoriesList = accessoriesStr
-          .split(/[+,/؛;]/)
-          .map((s) => s.trim())
-          .filter(Boolean);
-      }
-
-      // Parse status
-      let finalStatus: DeviceStatus = 'شغال';
-      if (statusStr.includes('عاطل') || statusStr.toLowerCase().includes('faulty')) {
-        finalStatus = 'عاطل';
-      } else if (statusStr.includes('تالف') || statusStr.toLowerCase().includes('damage')) {
-        finalStatus = 'تالف';
-      }
-
-      const difference = currentQty - bookQty;
-      const now = new Date().toISOString();
-
-      const newAsset: Asset = {
-        id: `asset-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
-        mainDepartment: mainDept,
-        subDepartment: subDept,
-        deviceName: deviceName,
-        customId: finalCustomId,
-        currentQuantity: currentQty,
-        bookQuantity: bookQty,
-        difference,
-        model: model || 'غير محدد',
-        serialNumber: serialNumber || 'غير محدد',
-        manufacturer: manufacturer || 'غير محدد',
-        accessories: accessoriesList,
-        status: finalStatus,
-        custodian: custodian || 'غير مسجل',
-        notes: notes || '',
-        createdAt: now,
-        updatedAt: now,
-      };
-
-      result.importedAssets.push(newAsset);
-      result.successCount++;
-    });
+        result.importedPeriodic?.push({
+          id: `prev-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+          category: cleanCat,
+          mainDepartment: matchingAsset?.mainDepartment || 'عام',
+          subDepartment: matchingAsset?.subDepartment,
+          assetId: matchingAsset?.id || assetId,
+          customId: assetId,
+          deviceName: matchingAsset?.deviceName,
+          model: matchingAsset?.model,
+          serialNumber: matchingAsset?.serialNumber,
+          maintenanceDate: lastDate || new Date().toISOString().split('T')[0],
+          currentMeterReading: curReading || undefined,
+          nextMeterReading: nextReading || undefined,
+          batteryChangeDate: cleanCat === 'البطاريات' ? lastDate : undefined,
+          nextExpectedChangeDate: cleanCat === 'البطاريات' ? nextDate : undefined,
+          performedBy: 'فني الصيانة',
+          notes: notes,
+          createdAt: new Date().toISOString(),
+        });
+      });
+    }
 
     return result;
   }

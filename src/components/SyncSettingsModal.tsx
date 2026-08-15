@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Cloud,
   RefreshCw,
@@ -12,12 +12,13 @@ import {
   HardDrive,
   FolderSync,
   LogOut,
-  ExternalLink,
+  Image as ImageIcon,
   CheckCircle2,
   AlertTriangle,
 } from 'lucide-react';
 import { StorageService } from '../services/storage';
-import { GoogleDriveService, GoogleDriveFile } from '../services/googleDriveService';
+import { GoogleDriveService, GoogleDriveFile, DriveImageSyncReport } from '../services/googleDriveService';
+import { ExcelUtils } from '../utils/excelImportExport';
 
 interface SyncSettingsModalProps {
   onClose: () => void;
@@ -40,6 +41,14 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({ onClose, o
   const [driveBackups, setDriveBackups] = useState<GoogleDriveFile[]>([]);
   const [isLoadingBackups, setIsLoadingBackups] = useState(false);
   const [driveFeedback, setDriveFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Google Drive Image Sync State
+  const [isSyncingDriveImages, setIsSyncingDriveImages] = useState(false);
+  const [driveImageProgress, setDriveImageProgress] = useState<{ current: number; total: number; fileName: string } | null>(null);
+  const [driveImageReport, setDriveImageReport] = useState<DriveImageSyncReport | null>(null);
+
+  // File Inputs
+  const excelComprehensiveInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const unsubscribe = GoogleDriveService.initAuth(
@@ -127,9 +136,87 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({ onClose, o
     }
   };
 
-  // Apps Script code for Google Sheets integration
+  // Sync Images directly from Google Drive Hospital Database folder
+  const handleSyncImagesFromDriveFolder = async () => {
+    if (!googleUser) {
+      alert('يرجى تسجيل الدخول بحساب Google أولاً');
+      return;
+    }
+
+    setIsSyncingDriveImages(true);
+    setDriveImageReport(null);
+    setDriveImageProgress(null);
+
+    try {
+      const currentAssets = StorageService.getAssets();
+      const { report, updatedAssets } = await GoogleDriveService.syncImagesFromHospitalDatabase(
+        currentAssets,
+        (current, total, fileName) => {
+          setDriveImageProgress({ current, total, fileName });
+        }
+      );
+
+      setDriveImageReport(report);
+      if (report.matchedCount > 0) {
+        StorageService.batchImportAssets(updatedAssets);
+        onRefresh();
+      }
+    } catch (err: any) {
+      alert(`فشل سحب ومزامنة الصور من Google Drive: ${err?.message}`);
+    } finally {
+      setIsSyncingDriveImages(false);
+      setDriveImageProgress(null);
+    }
+  };
+
+  // Export Comprehensive 6-Sheet Excel Workbook
+  const handleExportComprehensiveExcel = () => {
+    const fullData = StorageService.getFullDataBackup();
+    ExcelUtils.exportComprehensiveDatabaseToXLSX(fullData);
+  };
+
+  // Import Comprehensive 6-Sheet Excel File
+  const handleImportComprehensiveExcel = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const currentAssets = StorageService.getAssets();
+      const parsed = await ExcelUtils.parseExcelOrCSV(file, currentAssets);
+
+      if (parsed.isComprehensive) {
+        const importRes = StorageService.batchImportComprehensiveData({
+          assets: parsed.importedAssets,
+          users: parsed.importedUsers,
+          tickets: parsed.importedTickets,
+          periodicRecords: parsed.importedPeriodic,
+        });
+
+        alert(
+          `تم استيراد قاعدة البيانات بنجاح!\n` +
+          `• الأصول والعهد: ${importRes.assetsCount}\n` +
+          `• المستخدمين: ${importRes.usersCount}\n` +
+          `• بلاغات الصيانة: ${importRes.ticketsCount}\n` +
+          `• الصيانة الدورية: ${importRes.periodicCount}`
+        );
+      } else {
+        StorageService.batchImportAssets(parsed.importedAssets);
+        alert(`تم استيراد ${parsed.importedAssets.length} جهاز بنجاح!`);
+      }
+
+      onRefresh();
+      onClose();
+    } catch (err: any) {
+      alert(`فشل استيراد الملف: ${err?.message || 'تأكد من هيكل ملف الإكسل'}`);
+    } finally {
+      if (excelComprehensiveInputRef.current) excelComprehensiveInputRef.current.value = '';
+    }
+  };
+
+  // Google Apps Script code for 6 Sheets
   const googleAppsScriptCode = `/**
- * Google Apps Script Web App for Hospital Asset Management
+ * Google Apps Script Web App for Hospital Asset & Maintenance Management
+ * Database: "قاعدة بيانات نظام الاصول والصيانة" (6 Sheets)
  * 1. Open your Google Sheet
  * 2. Extensions > Apps Script
  * 3. Paste this code and click Deploy > New Deployment
@@ -140,29 +227,88 @@ function doPost(e) {
   try {
     var data = JSON.parse(e.postData.contents);
     var ss = SpreadsheetApp.getActiveSpreadsheet();
-    
-    // Process full sync or queue updates
-    if (data.action === 'FULL_BACKUP' && data.payload) {
-      var assetsSheet = ss.getSheetByName('Assets') || ss.insertSheet('Assets');
-      assetsSheet.clear();
-      
-      var headers = ['ID', 'القسم الرئيسي', 'القسم الفرعي', 'اسم الجهاز', 'الموديل', 'الرقم التسلسلي', 'تاريخ التوريد', 'تاريخ انتهاء الضمان', 'الشركة الموردة', 'رقم هاتف المورد', 'اسم الوكيل', 'هاتف الوكيل', 'الحالة الفنية', 'ملاحظات', 'آخر تحديث'];
-      assetsSheet.appendRow(headers);
-      
-      var assets = data.payload.assets || [];
-      for (var i = 0; i < assets.length; i++) {
-        var a = assets[i];
-        assetsSheet.appendRow([
-          a.customId, a.mainDepartment, a.subDepartment || '', a.deviceName,
-          a.model || '', a.serialNumber || '', a.supplyDate || '',
-          a.warrantyEndDate || '', a.supplierCompany || '', a.supplierPhone || '',
-          a.agentName || '', a.agentPhone || '', a.technicalStatus || '',
-          a.notes || '', a.updatedAt || ''
+    var payload = data.fullBackup || data.payload;
+
+    if (payload) {
+      // 1. Sheet: Users
+      var uSheet = ss.getSheetByName('Users') || ss.insertSheet('Users');
+      uSheet.clear();
+      uSheet.appendRow(['Username', 'Password', 'FullName', 'Role', 'Department', 'Status']);
+      var users = payload.users || [];
+      for (var i = 0; i < users.length; i++) {
+        var u = users[i];
+        uSheet.appendRow([u.username, u.password || '123456', u.fullName, u.role, u.assignedDepartment || 'جميع الأقسام', u.isActive !== false ? 'Active' : 'Inactive']);
+      }
+
+      // 2. Sheet: Assests
+      var aSheet = ss.getSheetByName('Assests') || ss.getSheetByName('Assets') || ss.insertSheet('Assests');
+      aSheet.clear();
+      aSheet.appendRow(['القسم', 'القسم الداخلي', 'Device Name', 'Code', 'الكمية', 'الكمية الدفترية', 'الفارق', 'Model', 'Serial Number', 'Company', 'التوابع', 'مستلم العهدة', 'Status', 'Notes', 'Image URL']);
+      var assets = payload.assets || [];
+      for (var j = 0; j < assets.length; j++) {
+        var a = assets[j];
+        var diff = (a.currentQuantity || 0) - (a.bookQuantity || 0);
+        aSheet.appendRow([
+          a.mainDepartment || '', a.subDepartment || '', a.deviceName || '', a.customId || '',
+          a.currentQuantity || 0, a.bookQuantity || 0, diff, a.model || '',
+          a.serialNumber || '', a.manufacturer || '', (a.accessories || []).join(' + '),
+          a.custodian || '', a.status || 'شغال', a.notes || '', a.imageUrl || ''
         ]);
       }
+
+      // 3. Sheet: Maintenance Tickets
+      var tSheet = ss.getSheetByName('Maintenance Tickets') || ss.insertSheet('Maintenance Tickets');
+      tSheet.clear();
+      tSheet.appendRow(['Ticket ID', 'Asset ID', 'Status (Pending, In_Progress, Completed)', 'Supervisor Name', 'Complaint Text', 'Created At', 'Received At', 'Technician Name', 'Initial Report', 'Required Parts', 'Final Report', 'Completed At', 'Repair Duration', 'PDF Link']);
+      var tickets = payload.tickets || [];
+      for (var k = 0; k < tickets.length; k++) {
+        var t = tickets[k];
+        var statusEn = t.status === 'تم الصيانة' ? 'Completed' : (t.status === 'قيد الصيانة' ? 'In_Progress' : 'Pending');
+        tSheet.appendRow([
+          t.ticketNumber || t.id, t.customId || t.assetId || '', statusEn,
+          t.submittedBy ? t.submittedBy.userName : '', t.complaintDescription || '',
+          (t.complaintDate || '') + ' ' + (t.complaintTime || ''), t.receivedAt || '',
+          t.receivedBy || t.completedBy || '', t.initialReport || '', t.requiredParts || '',
+          t.finalReport || '', t.completedAt || '', t.repairDuration || '', ''
+        ]);
+      }
+
+      // 4. Sheet: Preventive Maintenance
+      var pSheet = ss.getSheetByName('Preventive Maintenance') || ss.insertSheet('Preventive Maintenance');
+      pSheet.clear();
+      pSheet.appendRow(['Type (AC, Oil, Battery)', 'Asset ID', 'Last Service Date', 'Current Reading', 'Next Reading', 'Next Service Date', 'Notes']);
+      var periodic = payload.periodic || payload.periodicRecords || [];
+      for (var p = 0; p < periodic.length; p++) {
+        var pr = periodic[p];
+        var typeCode = pr.category === 'التكييف' ? 'AC' : (pr.category === 'الزيوت والفلاتر' ? 'Oil' : 'Battery');
+        pSheet.appendRow([
+          typeCode, pr.customId || pr.assetId || '', pr.maintenanceDate || pr.batteryChangeDate || '',
+          pr.currentMeterReading || '', pr.nextMeterReading || '', pr.nextExpectedChangeDate || '',
+          pr.notes || pr.workDone || ''
+        ]);
+      }
+
+      // 5. Sheet: Activity Logs (History)
+      var hSheet = ss.getSheetByName('Activity Logs (History)') || ss.insertSheet('Activity Logs (History)');
+      hSheet.clear();
+      hSheet.appendRow(['Timestamp', 'User', 'Action', 'Details']);
+      var history = payload.history || [];
+      for (var h = 0; h < Math.min(history.length, 500); h++) {
+        var hl = history[h];
+        hSheet.appendRow([hl.timestamp || '', hl.performedBy + ' (' + hl.userRole + ')', hl.action || '', hl.details || '']);
+      }
+
+      // 6. Sheet: Stats (Read-Only)
+      var sSheet = ss.getSheetByName('Stats') || ss.insertSheet('Stats');
+      sSheet.clear();
+      sSheet.appendRow(['المؤشر الإحصائي (Metric)', 'القيمة (Value)']);
+      sSheet.appendRow(['إجمالي الأجهزة المسجلة', assets.length]);
+      sSheet.appendRow(['إجمالي بلاغات الصيانة', tickets.length]);
+      sSheet.appendRow(['إجمالي سجلات الصيانة الدورية', periodic.length]);
+      sSheet.appendRow(['تاريخ آخر تحديث سحابي', new Date().toLocaleString('ar-EG')]);
     }
-    
-    return ContentService.createTextOutput(JSON.stringify({ status: 'success', message: 'Data synced successfully', timestamp: new Date() }))
+
+    return ContentService.createTextOutput(JSON.stringify({ status: 'success', message: 'All 6 sheets synchronized successfully', timestamp: new Date() }))
       .setMimeType(ContentService.MimeType.JSON);
   } catch (err) {
     return ContentService.createTextOutput(JSON.stringify({ status: 'error', message: err.toString() }))
@@ -183,7 +329,7 @@ function doPost(e) {
 
   const handleTriggerSync = async () => {
     setIsSyncing(true);
-    setSyncStatusMsg('جاري مزامنة البيانات والعمليات المعلقة...');
+    setSyncStatusMsg('جاري مزامنة البيانات والـ 6 صفحات مع Google Sheets...');
     try {
       const result = await StorageService.triggerManualSync();
       setPendingCount(StorageService.getPendingSyncCount());
@@ -202,42 +348,9 @@ function doPost(e) {
     setTimeout(() => setCopiedScript(false), 2500);
   };
 
-  // Full Database JSON Backup Export
-  const handleExportBackupJSON = () => {
-    const data = StorageService.getFullDataBackup();
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `نسخة_احتياطية_كاملة_${new Date().toISOString().split('T')[0]}.json`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  // Full Database JSON Backup Import
-  const handleImportBackupJSON = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      try {
-        const json = JSON.parse(event.target?.result as string);
-        StorageService.restoreFullDataBackup(json);
-        alert('تم استعادة النسخة الاحتياطية بنجاح!');
-        onRefresh();
-        onClose();
-      } catch (err: any) {
-        alert('الملف غير صالح أو تالف');
-      }
-    };
-    reader.readAsText(file);
-  };
-
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-      <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl space-y-5 text-right max-h-[90vh] flex flex-col">
+      <div className="bg-white rounded-2xl max-w-3xl w-full p-6 shadow-2xl space-y-5 text-right max-h-[90vh] flex flex-col">
         <div className="flex items-center justify-between border-b pb-3">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-xl bg-blue-100 text-blue-600 flex items-center justify-center">
@@ -245,10 +358,10 @@ function doPost(e) {
             </div>
             <div>
               <h3 className="text-base font-bold text-slate-900">
-                إعدادات المزامنة السحابية و Google Drive
+                إعدادات قاعدة البيانات والمزامنة (Google Drive & Sheets)
               </h3>
               <p className="text-[11px] text-slate-500">
-                مزامنة وحفظ النسخ الاحتياطية سحابياً ومشاركتها مع كافة الأجهزة
+                مزامنة الـ 6 صفحات، ربط صور مجلد Hospital Database، وتصدير واستيراد قاعدة البيانات الكاملة
               </p>
             </div>
           </div>
@@ -294,7 +407,49 @@ function doPost(e) {
           </div>
 
           {/* ========================================================================= */}
-          {/* 🌟 GOOGLE DRIVE INTEGRATION SECTION */}
+          {/* 🌟 1. EXCEL DATABASE COMPREHENSIVE (6 SHEETS) SECTION */}
+          {/* ========================================================================= */}
+          <div className="p-4 rounded-2xl bg-gradient-to-br from-emerald-50 via-teal-50/40 to-white border border-emerald-200 shadow-xs space-y-3">
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-lg bg-emerald-600 text-white flex items-center justify-center">
+                <FileSpreadsheet className="w-4 h-4" />
+              </div>
+              <div>
+                <h4 className="font-bold text-slate-900 text-sm">
+                  ملف Excel الشامل: «قاعدة بيانات نظام الاصول والصيانة» (6 صفحات)
+                </h4>
+                <p className="text-[11px] text-slate-500">
+                  يتضمن صفحات: Users, Assests, Maintenance Tickets, Preventive Maintenance, Activity Logs, Stats
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={handleExportComprehensiveExcel}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold transition-all shadow-xs"
+              >
+                <Download className="w-3.5 h-3.5" />
+                تصدير قاعدة البيانات (6 صفحات Excel)
+              </button>
+
+              <label className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white hover:bg-slate-50 text-slate-800 border border-slate-300 font-bold cursor-pointer transition-all shadow-xs">
+                <Upload className="w-3.5 h-3.5 text-emerald-600" />
+                <span>استيراد ملف قاعدة البيانات Excel الشامل</span>
+                <input
+                  ref={excelComprehensiveInputRef}
+                  type="file"
+                  accept=".xlsx, .xls"
+                  onChange={handleImportComprehensiveExcel}
+                  className="hidden"
+                />
+              </label>
+            </div>
+          </div>
+
+          {/* ========================================================================= */}
+          {/* 🌟 2. GOOGLE DRIVE & IMAGES FOLDER INTEGRATION */}
           {/* ========================================================================= */}
           <div className="p-4 rounded-2xl bg-gradient-to-br from-blue-50 via-indigo-50/50 to-white border border-blue-200 shadow-xs space-y-3">
             <div className="flex items-center justify-between">
@@ -303,15 +458,19 @@ function doPost(e) {
                   <HardDrive className="w-4 h-4" />
                 </div>
                 <div>
-                  <h4 className="font-bold text-slate-900 text-sm">مزامنة وحفظ Google Drive</h4>
-                  <p className="text-[11px] text-slate-500">حفظ سحابي لبيانات الأجهزة والصور على حسابك في Google</p>
+                  <h4 className="font-bold text-slate-900 text-sm">
+                    مزامنة Google Drive ومجلد «Hospital Database»
+                  </h4>
+                  <p className="text-[11px] text-slate-500">
+                    ربط حساب Google لسحب الصور تلقائياً وحفظ النسخ الاحتياطية سحابياً
+                  </p>
                 </div>
               </div>
 
               {googleUser ? (
                 <div className="flex items-center gap-2">
-                  <span className="text-[11px] text-emerald-700 font-bold flex items-center gap-1 bg-emerald-100 px-2 py-0.5 rounded-full border border-emerald-300">
-                    <CheckCircle2 className="w-3 h-3" /> متصل
+                  <span className="text-[11px] text-emerald-700 font-bold flex items-center gap-1 bg-emerald-100 px-2.5 py-1 rounded-full border border-emerald-300">
+                    <CheckCircle2 className="w-3 h-3" /> {googleUser.email}
                   </span>
                   <button
                     onClick={handleDisconnectGoogleDrive}
@@ -364,11 +523,58 @@ function doPost(e) {
 
             {googleUser && (
               <div className="space-y-3 pt-1">
+                {/* Image Sync from Hospital Database Folder */}
+                <div className="p-3 bg-blue-50/80 rounded-xl border border-blue-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="font-bold text-slate-800 block text-xs flex items-center gap-1.5">
+                        <ImageIcon className="w-4 h-4 text-blue-600" />
+                        سحب ومطابقة الصور من مجلد Hospital Database في Drive:
+                      </span>
+                      <p className="text-[10px] text-slate-500 mt-0.5">
+                        يقوم النظام بالبحث في مجلد Hospital Database ومطابقة أسماء ملفات الصور بكود الجهاز Code أو رقمه التسلسلي تلقائياً.
+                      </p>
+                    </div>
+
+                    <button
+                      onClick={handleSyncImagesFromDriveFolder}
+                      disabled={isSyncingDriveImages}
+                      className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs flex items-center gap-1.5 disabled:opacity-50 transition-colors shrink-0"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isSyncingDriveImages ? 'animate-spin' : ''}`} />
+                      {isSyncingDriveImages ? 'جاري السحب والمطابقة...' : 'سحب الصور ومطابقتها الآن'}
+                    </button>
+                  </div>
+
+                  {driveImageProgress && (
+                    <div className="p-2 bg-white rounded border border-blue-200 text-[11px] space-y-1">
+                      <div className="flex justify-between font-bold text-blue-800">
+                        <span>جاري معالجة: {driveImageProgress.fileName}</span>
+                        <span>{driveImageProgress.current} / {driveImageProgress.total}</span>
+                      </div>
+                      <div className="w-full h-1.5 bg-blue-100 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-blue-600 transition-all duration-200"
+                          style={{ width: `${Math.round((driveImageProgress.current / driveImageProgress.total) * 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {driveImageReport && (
+                    <div className="p-2 bg-emerald-50 rounded border border-emerald-200 text-[11px] text-emerald-900 font-medium">
+                      ✅ تم فحص ({driveImageReport.totalFound}) ملف صورة في مجلد Drive، وتم ربط (
+                      <strong className="font-bold text-emerald-800">{driveImageReport.matchedCount}</strong>) صورة بنجاح بالأجهزة!
+                    </div>
+                  )}
+                </div>
+
+                {/* Cloud Backups Controls */}
                 <div className="flex flex-wrap items-center gap-2">
                   <button
                     onClick={handleSaveBackupToDrive}
                     disabled={isUploadingToDrive}
-                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold transition-colors disabled:opacity-50"
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold transition-colors disabled:opacity-50"
                   >
                     <FolderSync className={`w-3.5 h-3.5 ${isUploadingToDrive ? 'animate-spin' : ''}`} />
                     {isUploadingToDrive ? 'جاري الرفع إلى Drive...' : 'حفظ نسخة احتياطية سحابية في Drive'}
@@ -380,7 +586,7 @@ function doPost(e) {
                     className="flex items-center gap-1 px-2.5 py-2 rounded-xl bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 font-bold transition-colors"
                   >
                     <RefreshCw className={`w-3.5 h-3.5 ${isLoadingBackups ? 'animate-spin' : ''}`} />
-                    تحديث القائمة
+                    تحديث قائمة النسخ
                   </button>
                 </div>
 
@@ -391,7 +597,7 @@ function doPost(e) {
                   </span>
                   {driveBackups.length === 0 ? (
                     <p className="text-[11px] text-slate-400">
-                      {isLoadingBackups ? 'جاري جلب الملفات من Google Drive...' : 'لا توجد نسخ احتياطية في مجلد النظام على Google Drive حتى الآن.'}
+                      {isLoadingBackups ? 'جاري جلب الملفات من Google Drive...' : 'لا توجد نسخ احتياطية في مجلد Hospital Database على Google Drive حتى الآن.'}
                     </p>
                   ) : (
                     <div className="space-y-1.5 max-h-32 overflow-y-auto">
@@ -428,11 +634,13 @@ function doPost(e) {
             )}
           </div>
 
-          {/* Configuration Form for Google Sheets Webhook */}
+          {/* ========================================================================= */}
+          {/* 🌟 3. GOOGLE APPS SCRIPT WEBHOOK CONFIGURATION */}
+          {/* ========================================================================= */}
           <form onSubmit={handleSaveSettings} className="space-y-3">
             <div>
               <label className="block font-bold text-slate-700 mb-1">
-                رابط Webhook لـ Google Apps Script / Google Sheets (اختياري):
+                رابط Webhook لـ Google Apps Script / Google Sheets (اختياري للمزامنة التلقائية مع الـ 6 صفحات):
               </label>
               <input
                 type="url"
@@ -442,7 +650,7 @@ function doPost(e) {
                 className="w-full px-3 py-2 rounded-xl border border-slate-300 font-mono text-xs focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
               />
               <span className="text-[11px] text-slate-400 block mt-1">
-                رابط تطبيق الويب الصادر من Apps Script في ملف Google Sheets الخاص بك للتسجيل الفوري في الجداول.
+                رابط تطبيق الويب الصادر من Apps Script في ملف Google Sheets الخاص بك لتحديث الـ 6 صفحات فوراً.
               </span>
             </div>
 
@@ -474,17 +682,17 @@ function doPost(e) {
                 className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold transition-colors disabled:opacity-50"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-                {isSyncing ? 'جاري المزامنة...' : 'مزامنة السجلات الآن'}
+                {isSyncing ? 'جاري المزامنة...' : 'مزامنة الـ 6 صفحات الآن'}
               </button>
             </div>
           </form>
 
-          {/* Google Apps Script Helper Accordion */}
+          {/* Google Apps Script Code Accordion */}
           <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
             <div className="flex items-center justify-between">
               <span className="font-bold text-slate-800 flex items-center gap-1.5">
                 <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
-                كود Google Apps Script لمزامنة الجداول:
+                كود Google Apps Script لمزامنة الـ 6 صفحات:
               </span>
               <button
                 type="button"
@@ -507,38 +715,6 @@ function doPost(e) {
             <pre className="p-3 bg-slate-900 text-slate-100 rounded-lg font-mono text-[10px] overflow-x-auto max-h-36">
               {googleAppsScriptCode}
             </pre>
-          </div>
-
-          {/* Disaster Recovery Backup Export / Restore (Local File) */}
-          <div className="p-4 rounded-xl bg-indigo-50/70 border border-indigo-200 space-y-2">
-            <div className="font-bold text-indigo-950 flex items-center gap-1.5">
-              <Database className="w-4 h-4 text-indigo-600" />
-              النسخ الاحتياطي اليدوي على الجهاز (JSON File):
-            </div>
-            <p className="text-[11px] text-indigo-900 leading-relaxed">
-              تحميل ملف نسخة احتياطية مباشرة على جهاز الكمبيوتر الخاص بك لاستعادته دون الحاجة للإنترنت.
-            </p>
-            <div className="flex items-center gap-3 pt-1">
-              <button
-                type="button"
-                onClick={handleExportBackupJSON}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-indigo-200 hover:bg-indigo-50 text-indigo-900 font-bold transition-colors"
-              >
-                <Download className="w-3.5 h-3.5 text-indigo-600" />
-                تحميل نسخة احتياطية (JSON)
-              </button>
-
-              <label className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold cursor-pointer transition-colors">
-                <Upload className="w-3.5 h-3.5" />
-                <span>استعادة من ملف JSON</span>
-                <input
-                  type="file"
-                  accept=".json"
-                  onChange={handleImportBackupJSON}
-                  className="hidden"
-                />
-              </label>
-            </div>
           </div>
         </div>
 

@@ -311,6 +311,69 @@ export class StorageService {
     return { importedCount: count };
   }
 
+  static batchImportComprehensiveData(data: {
+    assets?: Asset[];
+    users?: User[];
+    tickets?: MaintenanceTicket[];
+    periodicRecords?: PeriodicMaintenanceRecord[];
+  }): { assetsCount: number; usersCount: number; ticketsCount: number; periodicCount: number } {
+    let assetsCount = 0;
+    let usersCount = 0;
+    let ticketsCount = 0;
+    let periodicCount = 0;
+
+    if (data.assets && data.assets.length > 0) {
+      const res = this.batchImportAssets(data.assets);
+      assetsCount = res.importedCount;
+    }
+
+    if (data.users && data.users.length > 0) {
+      const currentUsers = this.getUsers();
+      const userMap = new Map<string, User>();
+      currentUsers.forEach((u) => userMap.set(u.username.toLowerCase(), u));
+      data.users.forEach((u) => {
+        if (!userMap.has(u.username.toLowerCase())) {
+          userMap.set(u.username.toLowerCase(), u);
+          usersCount++;
+        }
+      });
+      setItem(STORAGE_KEYS.USERS, Array.from(userMap.values()));
+    }
+
+    if (data.tickets && data.tickets.length > 0) {
+      const currentTickets = this.getTickets();
+      const ticketMap = new Map<string, MaintenanceTicket>();
+      currentTickets.forEach((t) => ticketMap.set(t.ticketNumber || t.id, t));
+      data.tickets.forEach((t) => {
+        const key = t.ticketNumber || t.id;
+        ticketMap.set(key, t);
+        ticketsCount++;
+      });
+      setItem(STORAGE_KEYS.TICKETS, Array.from(ticketMap.values()));
+    }
+
+    if (data.periodicRecords && data.periodicRecords.length > 0) {
+      const currentPeriodic = this.getPeriodicRecords();
+      const pMap = new Map<string, PeriodicMaintenanceRecord>();
+      currentPeriodic.forEach((p) => pMap.set(p.id, p));
+      data.periodicRecords.forEach((p) => {
+        pMap.set(p.id, p);
+        periodicCount++;
+      });
+      setItem(STORAGE_KEYS.PERIODIC, Array.from(pMap.values()));
+    }
+
+    this.addHistoryLog(
+      'نظام',
+      'استيراد شامل لملف قاعدة البيانات (6 صفحات Excel)',
+      `تم استيراد ${assetsCount} أصل، ${usersCount} مستخدم، ${ticketsCount} بلاغ صيانة، ${periodicCount} سجل صيانة دورية`,
+      this.getCurrentUser()?.fullName || 'النظام',
+      'admin'
+    );
+
+    return { assetsCount, usersCount, ticketsCount, periodicCount };
+  }
+
   // Assets Management (Starts Empty)
   static getAssets(): Asset[] {
     const assets = getItem<Asset[]>(STORAGE_KEYS.ASSETS, []);
