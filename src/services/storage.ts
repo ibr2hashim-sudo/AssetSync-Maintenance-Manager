@@ -647,7 +647,7 @@ export class StorageService {
     setItem(STORAGE_KEYS.HISTORY, history);
   }
 
-  // Bulk Image Import with ID Matching
+  // Bulk Image Import with ID / Serial / Device Name Matching & Compression
   static async processBulkImages(
     files: File[],
     onProgress: (percent: number, currentFileName: string) => void
@@ -662,33 +662,70 @@ export class StorageService {
 
     let updatedCount = 0;
 
+    // Helper normalize function
+    const norm = (s: string) =>
+      s
+        .toLowerCase()
+        .replace(/[\s\-_.:/()]/g, '')
+        .replace(/[أإآ]/g, 'ا')
+        .replace(/ة/g, 'ه')
+        .replace(/ى/g, 'ي')
+        .trim();
+
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       onProgress(Math.round(((i + 1) / files.length) * 100), file.name);
 
-      // Extract ID from filename (e.g., "DEV-101.png" -> "DEV-101", "104_1.jpg" -> "104")
+      // Extract raw filename without extension (e.g. "DEV-101.png" -> "DEV-101", "IMG_001.jpg" -> "IMG_001")
       const rawName = file.name.substring(0, file.name.lastIndexOf('.')) || file.name;
-      const cleanId = rawName.trim();
+      const cleanRawName = rawName.trim();
+      const normRawName = norm(cleanRawName);
 
-      // Look for asset matching this customId (case-insensitive & trim)
-      const assetIdx = assets.findIndex(
-        (a) => a.customId.trim().toLowerCase() === cleanId.toLowerCase()
-      );
+      // Multi-strategy matching:
+      // 1. Exact Custom ID match (case-insensitive)
+      // 2. Normalized Custom ID match
+      // 3. Serial Number match
+      // 4. Exact Device Name match
+      // 5. Filename contains custom ID or Custom ID contains filename
+      let assetIdx = assets.findIndex((a) => a.customId.trim().toLowerCase() === cleanRawName.toLowerCase());
+
+      if (assetIdx === -1) {
+        assetIdx = assets.findIndex((a) => norm(a.customId) === normRawName && norm(a.customId).length > 0);
+      }
+
+      if (assetIdx === -1) {
+        assetIdx = assets.findIndex((a) => a.serialNumber && norm(a.serialNumber) === normRawName && norm(a.serialNumber) !== 'غيرمحدد');
+      }
+
+      if (assetIdx === -1) {
+        assetIdx = assets.findIndex((a) => norm(a.deviceName) === normRawName);
+      }
+
+      if (assetIdx === -1) {
+        // Fallback: If filename is like "DEV101_1" or "DEV101 (2)"
+        const strippedName = cleanRawName.replace(/[\s_(\-#]+[0-9]+[)]*$/, '').trim();
+        if (strippedName) {
+          const normStripped = norm(strippedName);
+          assetIdx = assets.findIndex(
+            (a) => norm(a.customId) === normStripped || (norm(a.serialNumber) === normStripped && norm(a.serialNumber) !== 'غيرمحدد')
+          );
+        }
+      }
 
       if (assetIdx === -1) {
         report.failed++;
         report.items.push({
           fileName: file.name,
-          customId: cleanId,
+          customId: cleanRawName,
           status: 'فشل',
-          reason: `لم يتم العثور على جهاز يحمل الـ ID المخصص (${cleanId})`,
+          reason: `لم يتم العثور على جهاز يطابق اسم الصورة (${cleanRawName}). تأكد أن اسم ملف الصورة يطابق كود الجهاز ID أو رقمه التسلسلي.`,
         });
         continue;
       }
 
-      // Convert file to base64 DataURL
+      // Convert & Compress file to base64 DataURL (so it doesn't overflow localStorage)
       try {
-        const base64 = await this.fileToBase64(file);
+        const base64 = await this.fileToCompressedBase64(file);
         assets[assetIdx].imageUrl = base64;
         assets[assetIdx].updatedAt = new Date().toISOString();
         updatedCount++;
@@ -696,16 +733,16 @@ export class StorageService {
         report.successful++;
         report.items.push({
           fileName: file.name,
-          customId: assets[assetIdx].customId,
+          customId: `${assets[assetIdx].deviceName} (ID: ${assets[assetIdx].customId})`,
           status: 'نجاح',
         });
-      } catch (err) {
+      } catch {
         report.failed++;
         report.items.push({
           fileName: file.name,
-          customId: cleanId,
+          customId: cleanRawName,
           status: 'فشل',
-          reason: 'تعذر قراءة ملف الصورة أو حجم الملف كبير جداً',
+          reason: 'تعذر ضغط أو معالجة ملف الصورة',
         });
       }
     }
@@ -725,10 +762,41 @@ export class StorageService {
     return report;
   }
 
-  private static fileToBase64(file: File): Promise<string> {
+  // Compress image before storing to prevent localStorage overflow
+  private static fileToCompressedBase64(file: File): Promise<string> {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const maxDim = 800; // max width/height
+          let width = img.width;
+          let height = img.height;
+
+          if (width > height && width > maxDim) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else if (height > maxDim) {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            resolve(e.target?.result as string);
+            return;
+          }
+
+          ctx.drawImage(img, 0, 0, width, height);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.75); // compressed JPEG
+          resolve(dataUrl);
+        };
+        img.onerror = () => resolve(e.target?.result as string);
+        img.src = e.target?.result as string;
+      };
       reader.onerror = (err) => reject(err);
       reader.readAsDataURL(file);
     });

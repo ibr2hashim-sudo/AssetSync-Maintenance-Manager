@@ -135,25 +135,52 @@ export class ExcelUtils {
         const val = String(colVal ?? '').trim();
         const normCol = ExcelUtils.normalizeKey(colName);
 
-        // القسم الرئيسي: القسم / القسم الرئيسي / department / maindepartment
+        // القسم الرئيسي: القسم / القسم الرئيسي / الإدارة / المبنى / المركز / department / maindepartment / clinic
         if (
           normCol === 'القسمالرئيسي' ||
           normCol === 'القسم' ||
+          normCol === 'الاداره' ||
+          normCol === 'المبني' ||
+          normCol === 'المركز' ||
           normCol === 'department' ||
           normCol === 'maindepartment' ||
           normCol === 'dept'
         ) {
           mainDept = val;
         }
-        // القسم الفرعي: القسم الفرعي / القسم الداخلي / subdepartment / subdept / internaldept
+        // القسم الفرعي: القسم الفرعي / القسم الداخلي / العيادة / الغرفة / الوحدة / الدور / الجناح / subdepartment / subdept / room / clinic
         else if (
           normCol === 'القسمالفرعي' ||
           normCol === 'القسمالداخلي' ||
+          normCol === 'العياده' ||
+          normCol === 'اسم العياده' ||
+          normCol === 'اسمالعياده' ||
+          normCol === 'الغرفه' ||
+          normCol === 'اسمالغرفه' ||
+          normCol === 'الوحده' ||
+          normCol === 'الدور' ||
+          normCol === 'الجناح' ||
           normCol === 'subdepartment' ||
           normCol === 'subdept' ||
-          normCol === 'internaldepartment'
+          normCol === 'internaldepartment' ||
+          normCol === 'room' ||
+          normCol === 'clinic'
         ) {
           subDept = val;
+        }
+        // موقع / مكان / جهة الجهاز: إذا كان العمود يحتوي على الموقع مثل "العيادات / عيادة العظام"
+        else if (
+          normCol === 'الموقع' ||
+          normCol === 'المكان' ||
+          normCol === 'الجهه' ||
+          normCol === 'location' ||
+          normCol === 'place'
+        ) {
+          if (!mainDept && !subDept) {
+            mainDept = val;
+          } else if (!subDept) {
+            subDept = val;
+          }
         }
         // اسم الجهاز: اسم الجهاز / اسم الأصل / البيان / الوصف / الصنف / الجهاز / devicename / name / assetname / item / description
         else if (
@@ -262,6 +289,21 @@ export class ExcelUtils {
         result.errorCount++;
         result.errors.push(`السطر ${rowNumber}: حقل اسم الجهاز (أو البيان / الصنف) مفقود في ملف الإكسل`);
         return;
+      }
+
+      if (!mainDept && subDept) {
+        mainDept = subDept;
+      }
+
+      // If mainDept contains a delimiter like "العيادات / عيادة القلب" or "العيادات - باطنة"
+      if (mainDept && (!subDept || subDept === mainDept)) {
+        if (mainDept.includes('/') || mainDept.includes('-') || mainDept.includes('–') || mainDept.includes('\\')) {
+          const parts = mainDept.split(/[/\\–-]/).map((p) => p.trim()).filter(Boolean);
+          if (parts.length >= 2) {
+            mainDept = parts[0];
+            subDept = parts.slice(1).join(' - ');
+          }
+        }
       }
 
       if (!mainDept) {
