@@ -22,6 +22,7 @@ import {
   Sparkles,
   Info,
   Wrench,
+  RefreshCw,
 } from 'lucide-react';
 import { Asset, DeviceStatus, ImageImportReport, User } from '../types';
 import { StorageService } from '../services/storage';
@@ -170,16 +171,23 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
 
   // Handle Excel/CSV File Upload
   const excelFileInputRef = useRef<HTMLInputElement>(null);
+  const [isImportingExcel, setIsImportingExcel] = useState(false);
+
   const handleExcelImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    setIsImportingExcel(true);
+    setImportNotice(null);
+
+    // Allow UI to render loading state
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
     try {
       const result = await ExcelUtils.parseExcelOrCSV(file, assets);
       if (result.importedAssets.length > 0) {
-        result.importedAssets.forEach((newAsset) => {
-          StorageService.saveAsset(newAsset);
-        });
+        // Fast atomic batch import (1 write instead of N writes to localStorage)
+        StorageService.batchImportAssets(result.importedAssets);
         onRefresh();
       }
 
@@ -201,6 +209,7 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
         message: `فشل استيراد الملف: ${err?.message || 'تأكد من تنسيق ملف Excel/CSV'}`,
       });
     } finally {
+      setIsImportingExcel(false);
       if (excelFileInputRef.current) excelFileInputRef.current.value = '';
     }
   };
@@ -334,11 +343,21 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
 
               <button
                 onClick={() => excelFileInputRef.current?.click()}
+                disabled={isImportingExcel}
                 title="استيراد أجهزة من ملف Excel / CSV"
-                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition-colors"
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition-colors disabled:opacity-50"
               >
-                <Upload className="w-3.5 h-3.5 text-blue-600" />
-                استيراد Excel
+                {isImportingExcel ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 text-blue-600 animate-spin" />
+                    جاري المعالجة...
+                  </>
+                ) : (
+                  <>
+                    <Upload className="w-3.5 h-3.5 text-blue-600" />
+                    استيراد Excel
+                  </>
+                )}
               </button>
 
               <button

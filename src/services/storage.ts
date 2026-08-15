@@ -157,6 +157,51 @@ export class StorageService {
     this.enqueueSyncOperation('DELETE_USER', { id });
   }
 
+  // Bulk / Batch Import Assets
+  static batchImportAssets(newAssets: Asset[]): { importedCount: number } {
+    if (!newAssets || newAssets.length === 0) return { importedCount: 0 };
+    const currentAssets = this.getAssets();
+    const currentUser = this.getCurrentUser();
+    
+    const assetMap = new Map<string, Asset>();
+    currentAssets.forEach((a) => {
+      assetMap.set(a.customId.trim().toLowerCase(), a);
+    });
+
+    let count = 0;
+    newAssets.forEach((incoming) => {
+      const key = incoming.customId.trim().toLowerCase();
+      if (assetMap.has(key)) {
+        // Update existing asset
+        const existing = assetMap.get(key)!;
+        assetMap.set(key, {
+          ...existing,
+          ...incoming,
+          id: existing.id,
+          updatedAt: new Date().toISOString(),
+        });
+      } else {
+        // Add new asset
+        assetMap.set(key, incoming);
+      }
+      count++;
+    });
+
+    const finalAssets = Array.from(assetMap.values());
+    setItem(STORAGE_KEYS.ASSETS, finalAssets);
+
+    this.addHistoryLog(
+      'أصول',
+      `استيراد جرد خارجي شامل (دفعة من ${count} جهاز)`,
+      `تم تحديث وإضافة ${count} جهاز في قاعدة البيانات دفعة واحدة`,
+      currentUser?.fullName || 'النظام',
+      currentUser?.role || 'admin'
+    );
+
+    this.enqueueSyncOperation('BATCH_IMPORT_ASSETS', { count });
+    return { importedCount: count };
+  }
+
   // Assets Management (Starts Empty)
   static getAssets(): Asset[] {
     const assets = getItem<Asset[]>(STORAGE_KEYS.ASSETS, []);
