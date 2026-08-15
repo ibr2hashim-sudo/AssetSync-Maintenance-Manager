@@ -112,13 +112,27 @@ export default function App() {
       {/* Top Main Navigation Bar */}
       <Navbar
         currentUser={currentUser}
+        activeTab={activeView}
+        setActiveTab={(tab: string) => setActiveView(tab as ActiveView)}
         isOnline={isOnline}
         isSyncing={isSyncing}
-        pendingSyncCount={pendingSyncCount}
-        onOpenSyncSettings={() => setShowSyncModal(true)}
+        pendingCount={pendingSyncCount}
+        lastSyncTime={StorageService.getSyncConfig().lastSyncTimestamp}
+        onManualSync={() => {
+          setIsSyncing(true);
+          StorageService.triggerManualSync()
+            .then(() => reloadData())
+            .finally(() => setIsSyncing(false));
+        }}
         onOpenHistory={() => setShowHistoryModal(true)}
-        onOpenFactoryReset={() => setShowFactoryResetModal(true)}
+        onOpenReset={() => setShowFactoryResetModal(true)}
+        onOpenSyncSettings={() => setShowSyncModal(true)}
         onOpenSwitchUser={() => setShowSwitchUserModal(true)}
+        onLogout={() => {
+          StorageService.logout();
+          reloadData();
+        }}
+        ticketPendingCount={pendingTicketsCount}
       />
 
       {/* Main Container */}

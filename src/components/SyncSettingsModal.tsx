@@ -1,7 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Cloud,
-  CloudCheck,
   RefreshCw,
   Copy,
   Check,
@@ -9,11 +8,16 @@ import {
   Upload,
   X,
   FileSpreadsheet,
-  AlertCircle,
-  HelpCircle,
   Database,
+  HardDrive,
+  FolderSync,
+  LogOut,
+  ExternalLink,
+  CheckCircle2,
+  AlertTriangle,
 } from 'lucide-react';
 import { StorageService } from '../services/storage';
+import { GoogleDriveService, GoogleDriveFile } from '../services/googleDriveService';
 
 interface SyncSettingsModalProps {
   onClose: () => void;
@@ -28,6 +32,100 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({ onClose, o
   const [copiedScript, setCopiedScript] = useState(false);
   const [syncStatusMsg, setSyncStatusMsg] = useState('');
   const [pendingCount, setPendingCount] = useState(StorageService.getPendingSyncCount());
+
+  // Google Drive State
+  const [googleUser, setGoogleUser] = useState(GoogleDriveService.getGoogleUser());
+  const [isConnectingDrive, setIsConnectingDrive] = useState(false);
+  const [isUploadingToDrive, setIsUploadingToDrive] = useState(false);
+  const [driveBackups, setDriveBackups] = useState<GoogleDriveFile[]>([]);
+  const [isLoadingBackups, setIsLoadingBackups] = useState(false);
+  const [driveFeedback, setDriveFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  useEffect(() => {
+    const unsubscribe = GoogleDriveService.initAuth(
+      (user) => {
+        setGoogleUser(user);
+        fetchDriveBackups();
+      },
+      () => {
+        setGoogleUser(null);
+        setDriveBackups([]);
+      }
+    );
+    return () => {
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
+  }, []);
+
+  const fetchDriveBackups = async () => {
+    if (!GoogleDriveService.getAccessToken()) return;
+    setIsLoadingBackups(true);
+    try {
+      const files = await GoogleDriveService.listBackupsFromDrive();
+      setDriveBackups(files);
+    } catch (e: any) {
+      console.warn('Could not load drive backups:', e);
+    } finally {
+      setIsLoadingBackups(false);
+    }
+  };
+
+  const handleConnectGoogleDrive = async () => {
+    setIsConnectingDrive(true);
+    setDriveFeedback(null);
+    try {
+      const result = await GoogleDriveService.signIn();
+      setGoogleUser(result.user);
+      setDriveFeedback({ type: 'success', text: `تم الاتصال بحساب Google بنجاح: ${result.user.email}` });
+      await fetchDriveBackups();
+    } catch (err: any) {
+      setDriveFeedback({ type: 'error', text: err.message || 'فشل الاتصال بـ Google Drive' });
+    } finally {
+      setIsConnectingDrive(false);
+    }
+  };
+
+  const handleDisconnectGoogleDrive = async () => {
+    await GoogleDriveService.logout();
+    setGoogleUser(null);
+    setDriveBackups([]);
+    setDriveFeedback({ type: 'success', text: 'تم تسجيل الخروج من Google Drive' });
+  };
+
+  const handleSaveBackupToDrive = async () => {
+    setIsUploadingToDrive(true);
+    setDriveFeedback(null);
+    try {
+      const fullData = StorageService.getFullDataBackup();
+      const res = await GoogleDriveService.uploadBackupToDrive(fullData);
+      setDriveFeedback({
+        type: 'success',
+        text: `تم حفظ نسخة احتياطية كاملة في Google Drive بنجاح: ${res.fileName}`,
+      });
+      await fetchDriveBackups();
+    } catch (err: any) {
+      setDriveFeedback({ type: 'error', text: err.message || 'فشل رفع النسخة إلى Google Drive' });
+    } finally {
+      setIsUploadingToDrive(false);
+    }
+  };
+
+  const handleRestoreFromDrive = async (file: GoogleDriveFile) => {
+    const confirmRestore = window.confirm(
+      `هل أنت متأكد من استعادة النسخة الاحتياطية (${file.name}) من Google Drive؟ سيتم استبدال البيانات الحالية.`
+    );
+    if (!confirmRestore) return;
+
+    try {
+      const backupData = await GoogleDriveService.downloadBackupContent(file.id);
+      StorageService.restoreFullDataBackup(backupData);
+      alert('تمت استعادة البيانات بنجاح من Google Drive!');
+      onRefresh();
+      onClose();
+    } catch (err: any) {
+      alert(`فشلت استعادة البيانات من Drive: ${err.message || 'خطأ غير متوقع'}`);
+    }
+  };
 
   // Apps Script code for Google Sheets integration
   const googleAppsScriptCode = `/**
@@ -147,10 +245,10 @@ function doPost(e) {
             </div>
             <div>
               <h3 className="text-base font-bold text-slate-900">
-                إعدادات المزامنة السحابية وقاعدة بيانات Google Sheets
+                إعدادات المزامنة السحابية و Google Drive
               </h3>
               <p className="text-[11px] text-slate-500">
-                الدعم الآلي للعمل بدون إنترنت (Offline-First) والربط مع Google Drive
+                مزامنة وحفظ النسخ الاحتياطية سحابياً ومشاركتها مع كافة الأجهزة
               </p>
             </div>
           </div>
@@ -195,11 +293,146 @@ function doPost(e) {
             </div>
           </div>
 
-          {/* Configuration Form */}
+          {/* ========================================================================= */}
+          {/* 🌟 GOOGLE DRIVE INTEGRATION SECTION */}
+          {/* ========================================================================= */}
+          <div className="p-4 rounded-2xl bg-gradient-to-br from-blue-50 via-indigo-50/50 to-white border border-blue-200 shadow-xs space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-lg bg-blue-600 text-white flex items-center justify-center">
+                  <HardDrive className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-slate-900 text-sm">مزامنة وحفظ Google Drive</h4>
+                  <p className="text-[11px] text-slate-500">حفظ سحابي لبيانات الأجهزة والصور على حسابك في Google</p>
+                </div>
+              </div>
+
+              {googleUser ? (
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] text-emerald-700 font-bold flex items-center gap-1 bg-emerald-100 px-2 py-0.5 rounded-full border border-emerald-300">
+                    <CheckCircle2 className="w-3 h-3" /> متصل
+                  </span>
+                  <button
+                    onClick={handleDisconnectGoogleDrive}
+                    className="p-1 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50"
+                    title="تسجيل الخروج من Google"
+                  >
+                    <LogOut className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={handleConnectGoogleDrive}
+                  disabled={isConnectingDrive}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white hover:bg-slate-50 text-slate-800 font-bold border border-slate-300 shadow-xs hover:shadow transition-all"
+                >
+                  <svg className="w-4 h-4" viewBox="0 0 24 24">
+                    <path
+                      fill="#4285F4"
+                      d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.66-5.17 3.66-9.17z"
+                    />
+                    <path
+                      fill="#34A853"
+                      d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.35 24 12 24z"
+                    />
+                    <path
+                      fill="#FBBC05"
+                      d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.98 0 12s.45 3.82 1.25 5.42l4.03-3.15z"
+                    />
+                    <path
+                      fill="#EA4335"
+                      d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.35 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"
+                    />
+                  </svg>
+                  <span>{isConnectingDrive ? 'جاري الاتصال...' : 'ربط Google Drive'}</span>
+                </button>
+              )}
+            </div>
+
+            {driveFeedback && (
+              <div
+                className={`p-2.5 rounded-xl text-xs font-bold border ${
+                  driveFeedback.type === 'success'
+                    ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                    : 'bg-red-50 text-red-800 border-red-200'
+                }`}
+              >
+                {driveFeedback.text}
+              </div>
+            )}
+
+            {googleUser && (
+              <div className="space-y-3 pt-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={handleSaveBackupToDrive}
+                    disabled={isUploadingToDrive}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold transition-colors disabled:opacity-50"
+                  >
+                    <FolderSync className={`w-3.5 h-3.5 ${isUploadingToDrive ? 'animate-spin' : ''}`} />
+                    {isUploadingToDrive ? 'جاري الرفع إلى Drive...' : 'حفظ نسخة احتياطية سحابية في Drive'}
+                  </button>
+
+                  <button
+                    onClick={fetchDriveBackups}
+                    disabled={isLoadingBackups}
+                    className="flex items-center gap-1 px-2.5 py-2 rounded-xl bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 font-bold transition-colors"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isLoadingBackups ? 'animate-spin' : ''}`} />
+                    تحديث القائمة
+                  </button>
+                </div>
+
+                {/* Stored Google Drive Backups List */}
+                <div className="bg-white rounded-xl border border-slate-200 p-3 space-y-2">
+                  <span className="font-bold text-slate-800 block text-xs">
+                    النسخ الاحتياطية المحفوظة في Google Drive ({driveBackups.length}):
+                  </span>
+                  {driveBackups.length === 0 ? (
+                    <p className="text-[11px] text-slate-400">
+                      {isLoadingBackups ? 'جاري جلب الملفات من Google Drive...' : 'لا توجد نسخ احتياطية في مجلد النظام على Google Drive حتى الآن.'}
+                    </p>
+                  ) : (
+                    <div className="space-y-1.5 max-h-32 overflow-y-auto">
+                      {driveBackups.map((file) => (
+                        <div
+                          key={file.id}
+                          className="flex items-center justify-between p-2 rounded-lg bg-slate-50 border border-slate-100 hover:bg-blue-50/50 transition-colors"
+                        >
+                          <div className="flex items-center gap-2 overflow-hidden">
+                            <Database className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                            <div className="truncate">
+                              <span className="font-mono font-bold text-slate-800 text-[11px] block truncate">
+                                {file.name}
+                              </span>
+                              {file.modifiedTime && (
+                                <span className="text-[10px] text-slate-400">
+                                  {new Date(file.modifiedTime).toLocaleString('ar-EG')}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => handleRestoreFromDrive(file)}
+                            className="px-2 py-1 rounded bg-blue-600 hover:bg-blue-700 text-white font-bold text-[10px] shrink-0"
+                          >
+                            استعادة هذه النسخة
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Configuration Form for Google Sheets Webhook */}
           <form onSubmit={handleSaveSettings} className="space-y-3">
             <div>
               <label className="block font-bold text-slate-700 mb-1">
-                رابط Webhook لـ Google Apps Script / Google Sheets:
+                رابط Webhook لـ Google Apps Script / Google Sheets (اختياري):
               </label>
               <input
                 type="url"
@@ -209,7 +442,7 @@ function doPost(e) {
                 className="w-full px-3 py-2 rounded-xl border border-slate-300 font-mono text-xs focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
               />
               <span className="text-[11px] text-slate-400 block mt-1">
-                رابط تطبيق الويب الصادر من Apps Script في ملف Google Sheets الخاص بك.
+                رابط تطبيق الويب الصادر من Apps Script في ملف Google Sheets الخاص بك للتسجيل الفوري في الجداول.
               </span>
             </div>
 
@@ -241,7 +474,7 @@ function doPost(e) {
                 className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold transition-colors disabled:opacity-50"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-                {isSyncing ? 'جاري المزامنة...' : 'مزامنة يدوية الآن'}
+                {isSyncing ? 'جاري المزامنة...' : 'مزامنة السجلات الآن'}
               </button>
             </div>
           </form>
@@ -251,7 +484,7 @@ function doPost(e) {
             <div className="flex items-center justify-between">
               <span className="font-bold text-slate-800 flex items-center gap-1.5">
                 <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
-                كود Google Apps Script الجاهز للمزامنة:
+                كود Google Apps Script لمزامنة الجداول:
               </span>
               <button
                 type="button"
@@ -276,14 +509,14 @@ function doPost(e) {
             </pre>
           </div>
 
-          {/* Disaster Recovery Backup Export / Restore */}
+          {/* Disaster Recovery Backup Export / Restore (Local File) */}
           <div className="p-4 rounded-xl bg-indigo-50/70 border border-indigo-200 space-y-2">
             <div className="font-bold text-indigo-950 flex items-center gap-1.5">
               <Database className="w-4 h-4 text-indigo-600" />
-              النسخ الاحتياطي المحلي الكامل (JSON Backup):
+              النسخ الاحتياطي اليدوي على الجهاز (JSON File):
             </div>
             <p className="text-[11px] text-indigo-900 leading-relaxed">
-              يمكنك تصدير قاعدة البيانات بكافة الأصول والطلبات والمستخدمين في ملف JSON أو استعادتها في أي وقت.
+              تحميل ملف نسخة احتياطية مباشرة على جهاز الكمبيوتر الخاص بك لاستعادته دون الحاجة للإنترنت.
             </p>
             <div className="flex items-center gap-3 pt-1">
               <button

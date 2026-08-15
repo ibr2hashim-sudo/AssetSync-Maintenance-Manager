@@ -27,13 +27,16 @@ export const FactoryResetModal: React.FC<FactoryResetModalProps> = ({
 
     setIsProcessing(true);
     try {
-      const success = StorageService.factoryReset(adminPassword.trim());
-      if (success) {
-        alert('تمت إعادة ضبط المصنع بنجاح. تم تصفير كافة البيانات وإعادة الحساب الافتراضي admin.');
+      const res = StorageService.factoryReset(adminPassword.trim());
+      if (res.success) {
+        alert(res.message || 'تمت إعادة ضبط المصنع بنجاح. تم تصفير كافة البيانات وإعادة الحساب الافتراضي admin.');
         onResetComplete();
+      } else {
+        setErrorMsg(res.message || 'كلمة مرور الأدمن غير صحيحة');
+        setIsProcessing(false);
       }
     } catch (err: any) {
-      setErrorMsg(err.message || 'كلمة مرور الأدمن غير صحيحة');
+      setErrorMsg(err.message || 'حدث خطأ أثناء إعادة ضبط البيانات');
       setIsProcessing(false);
     }
   };
