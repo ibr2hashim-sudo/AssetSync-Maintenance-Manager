@@ -197,7 +197,22 @@ export class StorageService {
           currentUser?.role || 'admin'
         );
       } else {
-        throw new Error('الجهاز غير موجود');
+        // If an ID is provided but not found in existing list, treat it as a new asset insertion
+        savedAsset = {
+          ...asset,
+          id: asset.id,
+          difference,
+          createdAt: now,
+          updatedAt: now,
+        };
+        assets.push(savedAsset);
+        this.addHistoryLog(
+          'أصول',
+          `إضافة أصل جديد: ${savedAsset.deviceName} (ID: ${savedAsset.customId})`,
+          `القسم: ${savedAsset.mainDepartment} / ${savedAsset.subDepartment} - الموديل: ${savedAsset.model}`,
+          currentUser?.fullName || 'النظام',
+          currentUser?.role || 'admin'
+        );
       }
     } else {
       savedAsset = {

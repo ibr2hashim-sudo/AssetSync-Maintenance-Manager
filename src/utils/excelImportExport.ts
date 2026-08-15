@@ -155,25 +155,42 @@ export class ExcelUtils {
         ) {
           subDept = val;
         }
-        // اسم الجهاز: اسم الجهاز / اسم الأصل / devicename / devicename / name / assetname
+        // اسم الجهاز: اسم الجهاز / اسم الأصل / البيان / الوصف / الصنف / الجهاز / devicename / name / assetname / item / description
         else if (
           normCol === 'اسمالجهاز' ||
           normCol === 'اسمالاصل' ||
+          normCol === 'الجهاز' ||
+          normCol === 'البيان' ||
+          normCol === 'الصنف' ||
+          normCol === 'الوصف' ||
+          normCol === 'اسمالصنف' ||
           normCol === 'devicename' ||
           normCol === 'assetname' ||
-          normCol === 'device'
+          normCol === 'device' ||
+          normCol === 'item' ||
+          normCol === 'description' ||
+          normCol === 'name'
         ) {
           deviceName = val;
         }
-        // ID مخصص للجهاز: كود الجهاز / ID / customid / deviceid / assetid / code
+        // ID مخصص للجهاز: كود الجهاز / الرقم التعريفي / الباركود / المسلسل / ID / customid / deviceid / assetid / code / tag / barcode
         else if (
           normCol === 'idمخصصللجهاز' ||
           normCol === 'كودالجهاز' ||
+          normCol === 'الرقمالتعريفي' ||
+          normCol === 'كود' ||
+          normCol === 'رمزالجهاز' ||
+          normCol === 'الباركود' ||
+          normCol === 'باركود' ||
           normCol === 'id' ||
           normCol === 'customid' ||
           normCol === 'deviceid' ||
           normCol === 'assetid' ||
           normCol === 'code' ||
+          normCol === 'tag' ||
+          normCol === 'tagno' ||
+          normCol === 'assetno' ||
+          normCol === 'barcode' ||
           normCol === 'رقمكودالجهاز'
         ) {
           customId = val;
@@ -241,39 +258,36 @@ export class ExcelUtils {
       });
 
       // Validation
-      if (!customId) {
-        result.errorCount++;
-        result.errors.push(`السطر ${rowNumber}: حقل ID المخصص مفقود ولا يمكن استيراد الجهاز بدونه`);
-        return;
-      }
-
       if (!deviceName) {
         result.errorCount++;
-        result.errors.push(`السطر ${rowNumber}: حقل اسم الجهاز مفقود`);
+        result.errors.push(`السطر ${rowNumber}: حقل اسم الجهاز (أو البيان / الصنف) مفقود في ملف الإكسل`);
         return;
       }
 
       if (!mainDept) {
-        result.errorCount++;
-        result.errors.push(`السطر ${rowNumber}: حقل القسم الرئيسي مفقود`);
-        return;
+        mainDept = 'عام';
       }
 
-      // If subdepartment is empty, default it to mainDept
       if (!subDept) {
         subDept = mainDept;
+      }
+
+      // If customId is empty, auto-generate a smart ID
+      if (!customId) {
+        customId = `DEV-${Date.now().toString().slice(-4)}${Math.floor(Math.random() * 900 + 100)}`;
       }
 
       const cleanCustomId = customId.trim();
       const lowerCustomId = cleanCustomId.toLowerCase();
 
       if (existingIds.has(lowerCustomId) || batchNewIds.has(lowerCustomId)) {
-        result.errorCount++;
-        result.errors.push(`السطر ${rowNumber}: الـ ID (${cleanCustomId}) مكرر ومسجل مسبقاً`);
-        return;
+        // If duplicated in existing or batch, add auto suffix to avoid collision
+        const uniqueCustomId = `${cleanCustomId}-${Math.floor(Math.random() * 900 + 100)}`;
+        customId = uniqueCustomId;
       }
 
-      batchNewIds.add(lowerCustomId);
+      const finalCustomId = customId.trim();
+      batchNewIds.add(finalCustomId.toLowerCase());
 
       // Parse accessories
       let accessoriesList: string[] = [];
@@ -300,7 +314,7 @@ export class ExcelUtils {
         mainDepartment: mainDept,
         subDepartment: subDept,
         deviceName: deviceName,
-        customId: cleanCustomId,
+        customId: finalCustomId,
         currentQuantity: currentQty,
         bookQuantity: bookQty,
         difference,
