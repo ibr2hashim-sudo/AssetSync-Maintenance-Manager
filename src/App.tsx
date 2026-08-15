@@ -121,7 +121,13 @@ export default function App() {
         onManualSync={() => {
           setIsSyncing(true);
           StorageService.triggerManualSync()
-            .then(() => reloadData())
+            .then((res) => {
+              reloadData();
+              alert(res.message);
+            })
+            .catch((err) => {
+              alert(err?.message || 'فشلت المزامنة اليدوية');
+            })
             .finally(() => setIsSyncing(false));
         }}
         onOpenHistory={() => setShowHistoryModal(true)}
