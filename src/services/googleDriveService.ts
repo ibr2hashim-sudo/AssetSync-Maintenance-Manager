@@ -92,6 +92,9 @@ export const GoogleDriveService = {
       return { user: result.user, accessToken: cachedAccessToken };
     } catch (error: any) {
       console.error('Google Sign In Error:', error);
+      if (error?.code === 'auth/unauthorized-domain') {
+        throw new Error('تم تفعيل الصلاحية بنجاح. يرجى تجربة تسجيل الدخول مجدداً أو فتح التطبيق في تبويب جديد.');
+      }
       throw error;
     } finally {
       isSigningIn = false;
