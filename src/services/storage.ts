@@ -60,6 +60,17 @@ const IDB_NAME = 'AssetMgmtImagesDB';
 const IDB_STORE = 'device_images';
 const IDB_VERSION = 1;
 
+function normKey(s: string): string {
+  if (!s) return '';
+  return s
+    .toLowerCase()
+    .replace(/[\s\-_.:/()#]/g, '')
+    .replace(/[أإآ]/g, 'ا')
+    .replace(/ة/g, 'ه')
+    .replace(/ى/g, 'ي')
+    .trim();
+}
+
 function openImageDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     if (typeof window === 'undefined' || !window.indexedDB) {
@@ -79,12 +90,28 @@ function openImageDB(): Promise<IDBDatabase> {
 }
 
 export async function saveImageToDB(customId: string, base64Data: string): Promise<void> {
+  if (!customId || !base64Data) return;
   try {
     const db = await openImageDB();
     return new Promise((resolve, reject) => {
       const tx = db.transaction(IDB_STORE, 'readwrite');
       const store = tx.objectStore(IDB_STORE);
-      store.put({ customId: customId.trim().toLowerCase(), dataUrl: base64Data, updatedAt: Date.now() });
+      
+      const cleanKey = customId.trim().toLowerCase();
+      const rawKey = customId.trim();
+      const normalizedKey = normKey(customId);
+      
+      // Save primary key
+      store.put({ customId: cleanKey, dataUrl: base64Data, updatedAt: Date.now() });
+      
+      // Also index raw and normalized keys if distinct
+      if (rawKey !== cleanKey) {
+        store.put({ customId: rawKey, dataUrl: base64Data, updatedAt: Date.now() });
+      }
+      if (normalizedKey && normalizedKey !== cleanKey) {
+        store.put({ customId: normalizedKey, dataUrl: base64Data, updatedAt: Date.now() });
+      }
+      
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });
@@ -94,15 +121,35 @@ export async function saveImageToDB(customId: string, base64Data: string): Promi
 }
 
 export async function getImageFromDB(customId: string): Promise<string | null> {
+  if (!customId) return null;
   try {
     const db = await openImageDB();
     return new Promise((resolve) => {
       const tx = db.transaction(IDB_STORE, 'readonly');
       const store = tx.objectStore(IDB_STORE);
-      const req = store.get(customId.trim().toLowerCase());
+      
+      const cleanKey = customId.trim().toLowerCase();
+      const req = store.get(cleanKey);
+      
       req.onsuccess = () => {
-        resolve(req.result ? req.result.dataUrl : null);
+        if (req.result && req.result.dataUrl) {
+          resolve(req.result.dataUrl);
+          return;
+        }
+        
+        // Try normalized key fallback
+        const normK = normKey(customId);
+        if (normK && normK !== cleanKey) {
+          const secondReq = store.get(normK);
+          secondReq.onsuccess = () => {
+            resolve(secondReq.result ? secondReq.result.dataUrl : null);
+          };
+          secondReq.onerror = () => resolve(null);
+        } else {
+          resolve(null);
+        }
       };
+      
       req.onerror = () => resolve(null);
     });
   } catch {
@@ -447,6 +494,15 @@ export class StorageService {
         currentUser?.fullName || 'النظام',
         currentUser?.role || 'admin'
       );
+    }
+
+    // If image is a base64 data URI, store in IndexedDB and replace with idb reference
+    if (savedAsset.imageUrl && savedAsset.imageUrl.startsWith('data:')) {
+      saveImageToDB(savedAsset.customId, savedAsset.imageUrl);
+      if (savedAsset.serialNumber && savedAsset.serialNumber !== 'غير محدد') {
+        saveImageToDB(savedAsset.serialNumber, savedAsset.imageUrl);
+      }
+      savedAsset.imageUrl = `idb://${savedAsset.customId}`;
     }
 
     setItem(STORAGE_KEYS.ASSETS, assets);
@@ -895,18 +951,22 @@ export class StorageService {
         continue;
       }
 
-      // Convert & Compress file to base64 DataURL (so it doesn't overflow localStorage)
+      // Convert & Compress file to base64 DataURL
       try {
         const base64 = await this.fileToCompressedBase64(file);
-        assets[assetIdx].imageUrl = base64;
+        const targetCustomId = assets[assetIdx].customId;
+        const targetSerial = assets[assetIdx].serialNumber;
+
+        // 1. Save full image to IndexedDB under ID and Serial
+        await saveImageToDB(targetCustomId, base64);
+        if (targetSerial && targetSerial !== 'غير محدد') {
+          await saveImageToDB(targetSerial, base64);
+        }
+
+        // 2. Store indexed reference so localStorage doesn't hit quota limits
+        assets[assetIdx].imageUrl = `idb://${targetCustomId}`;
         assets[assetIdx].updatedAt = new Date().toISOString();
         updatedCount++;
-
-        // Also save to IndexedDB asynchronously for robust long term storage
-        saveImageToDB(assets[assetIdx].customId, base64);
-        if (assets[assetIdx].serialNumber && assets[assetIdx].serialNumber !== 'غير محدد') {
-          saveImageToDB(assets[assetIdx].serialNumber, base64);
-        }
 
         report.successful++;
         report.items.push({

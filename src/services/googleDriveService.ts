@@ -391,11 +391,15 @@ export const GoogleDriveService = {
 
             // Save to IndexedDB
             await saveImageToDB(targetAsset.customId, base64Data);
+            if (targetAsset.serialNumber && targetAsset.serialNumber !== 'غير محدد') {
+              await saveImageToDB(targetAsset.serialNumber, base64Data);
+            }
 
-            // Update asset imageUrl with drive link or customId reference
+            // Update asset imageUrl with idb reference or direct thumbnail link
+            const directThumbnail = file.id ? `https://drive.google.com/thumbnail?id=${file.id}&sz=w1000` : `idb://${targetAsset.customId}`;
             updatedAssets[matchedIdx] = {
               ...targetAsset,
-              imageUrl: file.webViewLink || `idb://${targetAsset.customId}`,
+              imageUrl: directThumbnail,
               updatedAt: new Date().toISOString(),
             };
 

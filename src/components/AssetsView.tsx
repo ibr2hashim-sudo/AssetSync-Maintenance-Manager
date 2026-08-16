@@ -27,6 +27,7 @@ import {
 import { Asset, DeviceStatus, ImageImportReport, User } from '../types';
 import { StorageService } from '../services/storage';
 import { ExcelUtils } from '../utils/excelImportExport';
+import { AssetImage } from './AssetImage';
 
 interface AssetsViewProps {
   currentUser: User | null;
@@ -784,19 +785,15 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
                 >
                   {/* Top Image & Status Banner */}
                   <div className="relative h-44 bg-slate-100 flex items-center justify-center overflow-hidden">
-                    {asset.imageUrl ? (
-                      <img
-                        src={asset.imageUrl}
-                        alt={asset.deviceName}
-                        className="w-full h-full object-cover"
-                        referrerPolicy="no-referrer"
-                      />
-                    ) : (
-                      <div className="text-center text-slate-400">
-                        <ImageIcon className="w-10 h-10 mx-auto mb-1 opacity-40" />
-                        <span className="text-[11px]">لا توجد صورة</span>
-                      </div>
-                    )}
+                    <AssetImage
+                      src={asset.imageUrl}
+                      customId={asset.customId}
+                      serialNumber={asset.serialNumber}
+                      deviceName={asset.deviceName}
+                      alt={asset.deviceName}
+                      className="w-full h-full object-cover"
+                      containerClassName="w-full h-full flex items-center justify-center relative bg-slate-100"
+                    />
 
                     {/* Status Badge */}
                     <div className="absolute top-3 right-3">
@@ -1664,16 +1661,17 @@ const AssetDetailModal: React.FC<AssetDetailModalProps> = ({ asset, onClose, onO
         </div>
 
         {/* Image Display */}
-        {asset.imageUrl && (
-          <div className="h-56 w-full rounded-xl overflow-hidden border border-slate-200 bg-slate-100 flex items-center justify-center">
-            <img
-              src={asset.imageUrl}
-              alt={asset.deviceName}
-              className="w-full h-full object-contain"
-              referrerPolicy="no-referrer"
-            />
-          </div>
-        )}
+        <div className="h-60 w-full rounded-xl overflow-hidden border border-slate-200 bg-slate-100 flex items-center justify-center">
+          <AssetImage
+            src={asset.imageUrl}
+            customId={asset.customId}
+            serialNumber={asset.serialNumber}
+            deviceName={asset.deviceName}
+            alt={asset.deviceName}
+            className="w-full h-full object-contain"
+            containerClassName="w-full h-full flex items-center justify-center relative bg-slate-100"
+          />
+        </div>
 
         {/* 15 Attributes Grid */}
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
