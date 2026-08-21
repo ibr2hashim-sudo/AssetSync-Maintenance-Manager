@@ -122,7 +122,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             >
               <Wrench className="w-4 h-4" />
               طلبات الصيانة
-              {ticketPendingCount > 0 && (
+              {(currentUser?.role === 'admin' || currentUser?.role === 'technician') && ticketPendingCount > 0 && (
                 <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse inline-block" />
               )}
             </button>
@@ -350,7 +350,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             }`}
           >
             طلبات الصيانة
-            {ticketPendingCount > 0 && (
+            {(currentUser?.role === 'admin' || currentUser?.role === 'technician') && ticketPendingCount > 0 && (
               <span className="w-2 h-2 rounded-full bg-red-500 inline-block mr-1" />
             )}
           </button>

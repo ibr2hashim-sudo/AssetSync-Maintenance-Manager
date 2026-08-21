@@ -138,8 +138,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       </div>
 
-      {/* Urgent Pending Tickets Notice (Red notification) */}
-      {pendingTickets.length > 0 && (
+      {/* Urgent Pending Tickets Notice (Red notification) - Admin & Technician only */}
+      {(currentUser?.role === 'admin' || currentUser?.role === 'technician') && pendingTickets.length > 0 && (
         <div className="bg-red-50 border-r-4 border-red-500 rounded-xl p-4 shadow-sm flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center text-red-600 shrink-0 animate-bounce">
@@ -404,8 +404,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       </div>
 
-      {/* Two Column Layout: Recent Maintenance Tickets & Activity History */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      {/* Recent Maintenance Tickets & Activity History (History is Admin-Only) */}
+      <div className={`grid grid-cols-1 ${currentUser?.role === 'admin' ? 'lg:grid-cols-2' : ''} gap-6`}>
         {/* Latest Maintenance Requests */}
         <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-sm">
           <div className="flex items-center justify-between mb-4">
@@ -485,51 +485,51 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           )}
         </div>
 
-        {/* Recent System Activity Logs */}
-        <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-sm">
-          <div className="flex items-center justify-between mb-4">
-            <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-              <Clock className="w-4 h-4 text-blue-500" />
-              سجل العمليات الأخير
-            </h4>
-            {currentUser?.role === 'admin' && (
+        {/* Recent System Activity Logs (Admin Only) */}
+        {currentUser?.role === 'admin' && (
+          <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-sm">
+            <div className="flex items-center justify-between mb-4">
+              <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                <Clock className="w-4 h-4 text-blue-500" />
+                سجل العمليات الأخير
+              </h4>
               <button
                 onClick={() => onNavigate('history')}
                 className="text-xs font-semibold text-blue-600 hover:underline"
               >
                 عرض سجل الـ History الكامل
               </button>
+            </div>
+
+            {historyLogs.length === 0 ? (
+              <div className="text-center py-8 text-slate-400">
+                <Clock className="w-8 h-8 mx-auto mb-2 opacity-40" />
+                <p className="text-xs">لا توجد عمليات مسجلة في السجل بعد</p>
+              </div>
+            ) : (
+              <div className="space-y-2.5">
+                {historyLogs.slice(0, 4).map((log) => (
+                  <div
+                    key={log.id}
+                    className="p-3 rounded-xl bg-slate-50/60 border border-slate-100 text-xs"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-bold text-slate-800 truncate">{log.action}</span>
+                      <span className="text-[10px] text-slate-400 shrink-0">{log.timestamp}</span>
+                    </div>
+                    <p className="text-[11px] text-slate-600 mt-1 truncate">{log.details}</p>
+                    <div className="mt-1.5 flex items-center justify-between text-[10px] text-slate-400">
+                      <span>بواسطة: {log.performedBy}</span>
+                      <span className="px-1.5 py-0.2 rounded bg-slate-200/70 text-slate-700 font-medium">
+                        {log.category}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
-
-          {historyLogs.length === 0 ? (
-            <div className="text-center py-8 text-slate-400">
-              <Clock className="w-8 h-8 mx-auto mb-2 opacity-40" />
-              <p className="text-xs">لا توجد عمليات مسجلة في السجل بعد</p>
-            </div>
-          ) : (
-            <div className="space-y-2.5">
-              {historyLogs.slice(0, 4).map((log) => (
-                <div
-                  key={log.id}
-                  className="p-3 rounded-xl bg-slate-50/60 border border-slate-100 text-xs"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-bold text-slate-800 truncate">{log.action}</span>
-                    <span className="text-[10px] text-slate-400 shrink-0">{log.timestamp}</span>
-                  </div>
-                  <p className="text-[11px] text-slate-600 mt-1 truncate">{log.details}</p>
-                  <div className="mt-1.5 flex items-center justify-between text-[10px] text-slate-400">
-                    <span>بواسطة: {log.performedBy}</span>
-                    <span className="px-1.5 py-0.2 rounded bg-slate-200/70 text-slate-700 font-medium">
-                      {log.category}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+        )}
       </div>
     </div>
   );

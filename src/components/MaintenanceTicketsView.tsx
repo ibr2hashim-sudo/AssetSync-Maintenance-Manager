@@ -462,15 +462,19 @@ export const MaintenanceTicketsView: React.FC<MaintenanceTicketsViewProps> = ({
 
                 {/* Footer Action Buttons */}
                 <div className="p-3 bg-slate-50 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
-                  {/* PDF Export Button (A4 format) */}
-                  <button
-                    onClick={() => handleExportPDF(ticket)}
-                    disabled={isExportingPDF}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-slate-200 hover:bg-slate-100 text-slate-800 text-xs font-bold shadow-xs transition-colors"
-                  >
-                    <Download className="w-3.5 h-3.5 text-red-600" />
-                    تصدير تقرير الصيانة PDF (A4)
-                  </button>
+                  {/* PDF Export Button (A4 format) - Admin & Technician Only */}
+                  {(currentUser?.role === 'admin' || currentUser?.role === 'technician') ? (
+                    <button
+                      onClick={() => handleExportPDF(ticket)}
+                      disabled={isExportingPDF}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-slate-200 hover:bg-slate-100 text-slate-800 text-xs font-bold shadow-xs transition-colors"
+                    >
+                      <Download className="w-3.5 h-3.5 text-red-600" />
+                      تصدير تقرير الصيانة PDF (A4)
+                    </button>
+                  ) : (
+                    <div />
+                  )}
 
                   {/* Workflow Transitions (Admin & Technician only) */}
                   {currentUser?.role !== 'supervisor' && (

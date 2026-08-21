@@ -342,8 +342,9 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
           </p>
         </div>
 
-        {/* Action Buttons (Admin Only for management & imports) */}
+        {/* Action Buttons */}
         <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
+          {/* Admin Management Actions: Add Asset & Import Excel */}
           {currentUser?.role === 'admin' && (
             <>
               <button
@@ -375,7 +376,12 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
                   </>
                 )}
               </button>
+            </>
+          )}
 
+          {/* Report Issuance / Exports: Admin & Technician Only */}
+          {(currentUser?.role === 'admin' || currentUser?.role === 'technician') && (
+            <>
               <button
                 onClick={() => ExcelUtils.exportComprehensiveDatabaseToXLSX(StorageService.getFullDataBackup())}
                 title="تصدير قاعدة بيانات نظام الأصول والصيانة كاملة (6 صفحات Excel)"
@@ -393,16 +399,19 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
                 <Download className="w-3.5 h-3.5 text-slate-600" />
                 تصدير CSV
               </button>
-
-              <button
-                onClick={() => bulkImageInputRef.current?.click()}
-                title="استيراد الصور المجمعة وربطها تلقائياً بالـ ID"
-                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 text-xs font-bold transition-colors"
-              >
-                <ImageIcon className="w-3.5 h-3.5 text-purple-600" />
-                استيراد الصور المجمعة
-              </button>
             </>
+          )}
+
+          {/* Admin Bulk Image Import */}
+          {currentUser?.role === 'admin' && (
+            <button
+              onClick={() => bulkImageInputRef.current?.click()}
+              title="استيراد الصور المجمعة وربطها تلقائياً بالـ ID"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 text-xs font-bold transition-colors"
+            >
+              <ImageIcon className="w-3.5 h-3.5 text-purple-600" />
+              استيراد الصور المجمعة
+            </button>
           )}
         </div>
       </div>

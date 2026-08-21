@@ -99,13 +99,11 @@ export default function App() {
     setActiveView('tickets');
   };
 
-  // Pending ticket notification count
-  const pendingTicketsCount = tickets.filter((t) => {
-    if (currentUser?.role === 'supervisor' && currentUser.assignedDepartment) {
-      return t.status === 'معلق' && t.mainDepartment.trim() === currentUser.assignedDepartment.trim();
-    }
-    return t.status === 'معلق';
-  }).length;
+  // Pending ticket notification count (Only for Admin + Maintenance Technician)
+  const isStaffForTicketAlerts = currentUser?.role === 'admin' || currentUser?.role === 'technician';
+  const pendingTicketsCount = isStaffForTicketAlerts
+    ? tickets.filter((t) => t.status === 'معلق').length
+    : 0;
 
   return (
     <div className="min-h-screen bg-slate-100/70 text-slate-900 font-['Tajawal',sans-serif] text-right" dir="rtl">
@@ -322,7 +320,7 @@ export default function App() {
       )}
 
       {/* History Log Modal (Admin only) */}
-      {showHistoryModal && (
+      {showHistoryModal && currentUser?.role === 'admin' && (
         <HistoryModal onClose={() => setShowHistoryModal(false)} />
       )}
 
