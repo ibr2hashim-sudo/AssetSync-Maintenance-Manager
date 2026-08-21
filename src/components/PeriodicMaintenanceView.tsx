@@ -40,6 +40,32 @@ export const PeriodicMaintenanceView: React.FC<PeriodicMaintenanceViewProps> = (
   const safeAssets = useMemo(() => (Array.isArray(assets) ? assets : []), [assets]);
   const safeRecords = useMemo(() => (Array.isArray(periodicRecords) ? periodicRecords : []), [periodicRecords]);
 
+  // Accessible assets & records for supervisor
+  const accessibleAssets = useMemo(() => {
+    if (currentUser?.role === 'supervisor') {
+      const userDept = (currentUser.assignedDepartment || '').trim().toLowerCase();
+      if (!userDept) return [];
+      return safeAssets.filter((a) => (a.mainDepartment || '').trim().toLowerCase() === userDept);
+    }
+    return safeAssets;
+  }, [safeAssets, currentUser]);
+
+  const accessibleRecords = useMemo(() => {
+    if (currentUser?.role === 'supervisor') {
+      const userDept = (currentUser.assignedDepartment || '').trim().toLowerCase();
+      if (!userDept) return [];
+      return safeRecords.filter((r) => {
+        const recDept = (r.mainDepartment || '').trim().toLowerCase();
+        const matchedAsset = safeAssets.find(
+          (a) => a.id === r.assetId || (a.customId && a.customId === r.customId)
+        );
+        const assetDept = (matchedAsset?.mainDepartment || '').trim().toLowerCase();
+        return recDept === userDept || assetDept === userDept;
+      });
+    }
+    return safeRecords;
+  }, [safeRecords, safeAssets, currentUser]);
+
   // Hierarchy navigation states:
   // Step 1: Category
   // Step 2: Department
@@ -56,19 +82,22 @@ export const PeriodicMaintenanceView: React.FC<PeriodicMaintenanceViewProps> = (
 
   // Departments with assets
   const departmentsList = useMemo(() => {
+    if (currentUser?.role === 'supervisor') {
+      return currentUser.assignedDepartment ? [currentUser.assignedDepartment] : [];
+    }
     return Array.from(new Set(safeAssets.map((a) => a.mainDepartment).filter(Boolean)));
-  }, [safeAssets]);
+  }, [safeAssets, currentUser]);
 
   // Filtered records based on active hierarchy
   const filteredRecords = useMemo(() => {
-    let list = safeRecords;
+    let list = accessibleRecords;
 
     if (selectedCategory) {
       list = list.filter((r) => r.category === selectedCategory);
     }
 
     if (selectedDept) {
-      list = list.filter((r) => r.mainDepartment === selectedDept);
+      list = list.filter((r) => (r.mainDepartment || '').trim().toLowerCase() === selectedDept.trim().toLowerCase());
     }
 
     if (selectedAsset) {
@@ -89,7 +118,7 @@ export const PeriodicMaintenanceView: React.FC<PeriodicMaintenanceViewProps> = (
     }
 
     return list;
-  }, [safeRecords, selectedCategory, selectedDept, selectedAsset, searchTerm]);
+  }, [accessibleRecords, selectedCategory, selectedDept, selectedAsset, searchTerm]);
 
   // Add new category
   const handleAddNewCategory = (e: React.FormEvent) => {
@@ -443,9 +472,9 @@ export const PeriodicMaintenanceView: React.FC<PeriodicMaintenanceViewProps> = (
       {showAddRecordModal && (
         <AddPeriodicRecordModal
           categories={categories}
-          assets={assets}
+          assets={accessibleAssets}
           initialCategory={selectedCategory || categories[0]}
-          initialDepartment={selectedDept !== 'all_depts' ? selectedDept || '' : ''}
+          initialDepartment={currentUser?.role === 'supervisor' ? (currentUser.assignedDepartment || '') : (selectedDept !== 'all_depts' ? selectedDept || '' : '')}
           currentUser={currentUser}
           onClose={() => setShowAddRecordModal(false)}
           onSaved={() => {
@@ -619,10 +648,13 @@ const AddPeriodicRecordModal: React.FC<AddPeriodicRecordModalProps> = ({
               <input
                 type="text"
                 required
+                disabled={currentUser?.role === 'supervisor'}
                 value={department}
                 onChange={(e) => setDepartment(e.target.value)}
                 placeholder="اسم القسم"
-                className="w-full p-2.5 rounded-xl border border-slate-300"
+                className={`w-full p-2.5 rounded-xl border border-slate-300 ${
+                  currentUser?.role === 'supervisor' ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : ''
+                }`}
               />
             </div>
           </div>

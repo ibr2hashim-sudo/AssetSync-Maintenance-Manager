@@ -50,21 +50,40 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const safeTickets = Array.isArray(tickets) ? tickets : [];
   const safeUsers = Array.isArray(users) ? users : [];
 
+  // Filter accessible assets if user is supervisor (Strictly supervisor's assigned department)
+  const accessibleAssets =
+    currentUser?.role === 'supervisor'
+      ? safeAssets.filter(
+          (a) =>
+            currentUser.assignedDepartment &&
+            (a.mainDepartment || '').trim().toLowerCase() === currentUser.assignedDepartment.trim().toLowerCase()
+        )
+      : safeAssets;
+
+  // Filter accessible tickets if user is supervisor (Strictly supervisor's assigned department)
+  const accessibleTickets =
+    currentUser?.role === 'supervisor'
+      ? safeTickets.filter((t) => {
+          const userDept = (currentUser.assignedDepartment || '').trim().toLowerCase();
+          if (!userDept) return false;
+          const ticketDept = (t.mainDepartment || '').trim().toLowerCase();
+          const matchedAsset = safeAssets.find(
+            (a) => a.id === t.assetId || (a.customId && a.customId === t.customId)
+          );
+          const assetDept = (matchedAsset?.mainDepartment || '').trim().toLowerCase();
+          return ticketDept === userDept || assetDept === userDept;
+        })
+      : safeTickets;
+
   // Compute departments count
   const uniqueDepartments = Array.from(
-    new Set(safeAssets.map((a) => a.mainDepartment).filter(Boolean))
+    new Set(accessibleAssets.map((a) => a.mainDepartment).filter(Boolean))
   );
 
-  // Compute tickets counts
-  const pendingTickets = safeTickets.filter((t) => t.status === 'معلق');
-  const inProgressTickets = safeTickets.filter((t) => t.status === 'قيد الصيانة');
-  const completedTickets = safeTickets.filter((t) => t.status === 'تم الصيانة');
-
-  // Filter accessible assets if user is supervisor
-  const accessibleAssets =
-    currentUser?.role === 'supervisor' && currentUser?.assignedDepartment
-      ? safeAssets.filter((a) => a.mainDepartment === currentUser.assignedDepartment)
-      : safeAssets;
+  // Compute tickets counts based on accessible tickets
+  const pendingTickets = accessibleTickets.filter((t) => t.status === 'معلق');
+  const inProgressTickets = accessibleTickets.filter((t) => t.status === 'قيد الصيانة');
+  const completedTickets = accessibleTickets.filter((t) => t.status === 'تم الصيانة');
 
   const activeUsersCount = safeUsers.filter((u) => u.isActive !== false).length;
 
@@ -417,11 +436,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               onClick={() => onNavigate('tickets')}
               className="text-xs font-semibold text-blue-600 hover:underline"
             >
-              عرض الكل ({tickets.length})
+              عرض الكل ({accessibleTickets.length})
             </button>
           </div>
 
-          {tickets.length === 0 ? (
+          {accessibleTickets.length === 0 ? (
             <div className="text-center py-8 text-slate-400">
               <Wrench className="w-8 h-8 mx-auto mb-2 opacity-40" />
               <p className="text-xs">لا توجد بلاغات صيانة مسجلة حالياً</p>
@@ -434,7 +453,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
           ) : (
             <div className="space-y-2.5">
-              {tickets.slice(0, 4).map((ticket) => (
+              {accessibleTickets.slice(0, 4).map((ticket) => (
                 <div
                   key={ticket.id}
                   onClick={() => onNavigate('tickets')}

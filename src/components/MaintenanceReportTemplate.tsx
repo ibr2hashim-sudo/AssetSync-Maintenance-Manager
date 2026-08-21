@@ -7,10 +7,54 @@ interface MaintenanceReportTemplateProps {
   id?: string;
 }
 
+// Helper to compute duration if not already stored or if ticket is still ongoing
+function getOrComputeRepairDuration(ticket: MaintenanceTicket): { completedDateText: string; durationText: string } {
+  if (ticket.status === 'تم الصيانة') {
+    const completedDateText = ticket.completedAt || 'تم الإنجاز والاعتماد';
+    let durationText = ticket.repairDuration;
+
+    if (!durationText || durationText === '—') {
+      try {
+        const start = new Date(`${ticket.complaintDate}T00:00:00`);
+        const end = ticket.completedAt ? new Date(ticket.completedAt) : new Date();
+        const diffMs = Math.max(0, end.getTime() - start.getTime());
+        const diffMinutes = Math.floor(diffMs / (1000 * 60));
+        const diffHours = Math.floor(diffMinutes / 60);
+        const diffDays = Math.floor(diffHours / 24);
+
+        if (diffDays > 0) {
+          durationText = `${diffDays} يوم و ${diffHours % 24} ساعة`;
+        } else if (diffHours > 0) {
+          durationText = `${diffHours} ساعة و ${diffMinutes % 60} دقيقة`;
+        } else {
+          durationText = `${Math.max(1, diffMinutes)} دقيقة`;
+        }
+      } catch {
+        durationText = 'أقل من يوم';
+      }
+    }
+    return { completedDateText, durationText };
+  }
+
+  if (ticket.status === 'قيد الصيانة') {
+    return {
+      completedDateText: 'قيد التنفيذ (جاري العمل على الإصلاح)',
+      durationText: 'قيد الاحتساب (جاري استكمال أعمال الصيانة)',
+    };
+  }
+
+  return {
+    completedDateText: 'في انتظار مباشرة الفني (معلق)',
+    durationText: 'في انتظار البدء بالإصلاح',
+  };
+}
+
 export const MaintenanceReportTemplate: React.FC<MaintenanceReportTemplateProps> = ({
   ticket,
   id = 'maintenance-report-pdf-template',
 }) => {
+  const { completedDateText, durationText } = getOrComputeRepairDuration(ticket);
+
   return (
     <div
       id={id}
@@ -123,9 +167,9 @@ export const MaintenanceReportTemplate: React.FC<MaintenanceReportTemplateProps>
             </tr>
             <tr className="border-b border-slate-300">
               <td className="p-2 bg-slate-50 font-bold border-l border-slate-300">تاريخ إتمام الصيانة:</td>
-              <td className="p-2 border-l border-slate-300">{ticket.completedAt || '—'}</td>
+              <td className="p-2 font-bold text-slate-800 border-l border-slate-300">{completedDateText}</td>
               <td className="p-2 bg-slate-50 font-bold border-l border-slate-300">المدة المستغرقة للإصلاح:</td>
-              <td className="p-2 font-bold text-blue-900">{ticket.repairDuration || '—'}</td>
+              <td className="p-2 font-bold text-blue-900">{durationText}</td>
             </tr>
           </tbody>
         </table>

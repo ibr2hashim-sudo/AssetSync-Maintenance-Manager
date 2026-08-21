@@ -741,20 +741,24 @@ export class StorageService {
     const now = new Date();
     const formattedDate = `${now.toISOString().split('T')[0]} ${now.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}`;
 
-    // Calculate duration
+    // Calculate duration precisely with minutes and hours
     let durationStr = 'أقل من يوم';
     try {
       const start = new Date(ticket.complaintDate);
-      const diffMs = now.getTime() - start.getTime();
-      const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+      const diffMs = Math.max(0, now.getTime() - start.getTime());
+      const diffMinutes = Math.floor(diffMs / (1000 * 60));
+      const diffHours = Math.floor(diffMinutes / 60);
       const diffDays = Math.floor(diffHours / 24);
+
       if (diffDays > 0) {
         durationStr = `${diffDays} يوم و ${diffHours % 24} ساعة`;
+      } else if (diffHours > 0) {
+        durationStr = `${diffHours} ساعة و ${diffMinutes % 60} دقيقة`;
       } else {
-        durationStr = `${Math.max(1, diffHours)} ساعة`;
+        durationStr = `${Math.max(1, diffMinutes)} دقيقة`;
       }
     } catch {
-      durationStr = 'نفس اليوم';
+      durationStr = 'أقل من يوم';
     }
 
     tickets[index] = {

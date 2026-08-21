@@ -60,18 +60,29 @@ export const MaintenanceTicketsView: React.FC<MaintenanceTicketsViewProps> = ({
   const safeTickets = useMemo(() => (Array.isArray(tickets) ? tickets : []), [tickets]);
   const safeAssets = useMemo(() => (Array.isArray(assets) ? assets : []), [assets]);
 
-  // Supervisor department filter for tickets
+  // Supervisor department filter for tickets (Strictly only supervisor's assigned department)
   const accessibleTickets = useMemo(() => {
-    if (currentUser?.role === 'supervisor' && currentUser?.assignedDepartment) {
-      return safeTickets.filter((t) => t.mainDepartment && t.mainDepartment.trim() === currentUser.assignedDepartment?.trim());
+    if (currentUser?.role === 'supervisor') {
+      const userDept = (currentUser?.assignedDepartment || '').trim().toLowerCase();
+      if (!userDept) return [];
+      return safeTickets.filter((t) => {
+        const ticketDept = (t.mainDepartment || '').trim().toLowerCase();
+        const matchedAsset = safeAssets.find(
+          (a) => a.id === t.assetId || (a.customId && a.customId === t.customId)
+        );
+        const assetDept = (matchedAsset?.mainDepartment || '').trim().toLowerCase();
+        return ticketDept === userDept || assetDept === userDept;
+      });
     }
     return safeTickets;
-  }, [safeTickets, currentUser]);
+  }, [safeTickets, safeAssets, currentUser]);
 
-  // Accessible assets for ticket creation
+  // Accessible assets for ticket creation (Strictly only supervisor's assigned department)
   const accessibleAssets = useMemo(() => {
-    if (currentUser?.role === 'supervisor' && currentUser?.assignedDepartment) {
-      return safeAssets.filter((a) => a.mainDepartment && a.mainDepartment.trim() === currentUser.assignedDepartment?.trim());
+    if (currentUser?.role === 'supervisor') {
+      const userDept = (currentUser?.assignedDepartment || '').trim().toLowerCase();
+      if (!userDept) return [];
+      return safeAssets.filter((a) => (a.mainDepartment || '').trim().toLowerCase() === userDept);
     }
     return safeAssets;
   }, [safeAssets, currentUser]);
@@ -85,7 +96,7 @@ export const MaintenanceTicketsView: React.FC<MaintenanceTicketsViewProps> = ({
     }
 
     if (selectedDeptFilter !== 'all') {
-      list = list.filter((t) => t.mainDepartment.trim() === selectedDeptFilter.trim());
+      list = list.filter((t) => (t.mainDepartment || '').trim().toLowerCase() === selectedDeptFilter.trim().toLowerCase());
     }
 
     if (searchTerm.trim()) {
@@ -103,10 +114,13 @@ export const MaintenanceTicketsView: React.FC<MaintenanceTicketsViewProps> = ({
     return list;
   }, [accessibleTickets, activeTab, selectedDeptFilter, searchTerm]);
 
-  // Unique departments for filter
+  // Unique departments for filter (Admin and Technician only; supervisors don't need cross-dept selector)
   const departmentsList = useMemo(() => {
-    return Array.from(new Set(accessibleTickets.map((t) => t.mainDepartment).filter(Boolean)));
-  }, [accessibleTickets]);
+    if (currentUser?.role === 'supervisor') {
+      return currentUser.assignedDepartment ? [currentUser.assignedDepartment] : [];
+    }
+    return Array.from(new Set(safeTickets.map((t) => t.mainDepartment).filter(Boolean)));
+  }, [safeTickets, currentUser]);
 
   // Count badges
   const pendingCount = accessibleTickets.filter((t) => t.status === 'معلق').length;
