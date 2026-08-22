@@ -3,6 +3,7 @@
   "appId": "1:798786467447:web:a20799dce7e4facc4ab872",
   "apiKey": "AIzaSyDWtx7dW_qIz7gQI0yTQkfJVmI23qHbAeo",
   "authDomain": "virtual-ground-bdpgw.firebaseapp.com",
+  "firestoreDatabaseId": "ai-studio-assetsyncmainten-c86438fb-5892-4c4f-90fa-bb09ae52e5b2",
   "storageBucket": "virtual-ground-bdpgw.firebasestorage.app",
   "messagingSenderId": "798786467447",
   "measurementId": "",

@@ -7,6 +7,7 @@ import {
   User,
   ImageImportReport,
 } from '../types';
+import { FirestoreSyncService } from './firestoreSync';
 
 const STORAGE_KEYS = {
   USERS: 'asset_mgmt_users',
@@ -289,6 +290,7 @@ export class StorageService {
     }
 
     setItem(STORAGE_KEYS.USERS, users);
+    FirestoreSyncService.syncUser(savedUser);
     this.enqueueSyncOperation('SAVE_USER', savedUser);
     return savedUser;
   }
@@ -301,6 +303,7 @@ export class StorageService {
     }
     const filtered = users.filter((u) => u.id !== id);
     setItem(STORAGE_KEYS.USERS, filtered);
+    FirestoreSyncService.deleteUser(id);
 
     const currentUser = this.getCurrentUser();
     this.addHistoryLog(
@@ -506,6 +509,7 @@ export class StorageService {
     }
 
     setItem(STORAGE_KEYS.ASSETS, assets);
+    FirestoreSyncService.syncAsset(savedAsset);
     this.enqueueSyncOperation('SAVE_ASSET', savedAsset);
     return savedAsset;
   }
@@ -526,6 +530,7 @@ export class StorageService {
 
     const filtered = assets.filter((a) => a.id !== id);
     setItem(STORAGE_KEYS.ASSETS, filtered);
+    FirestoreSyncService.deleteAsset(id);
 
     const currentUser = this.getCurrentUser();
     this.addHistoryLog(
@@ -647,6 +652,7 @@ export class StorageService {
 
     tickets.unshift(newTicket);
     setItem(STORAGE_KEYS.TICKETS, tickets);
+    FirestoreSyncService.syncTicket(newTicket);
 
     // Update asset status to 'عاطل' if it was 'شغال'
     const assets = this.getAssets();
@@ -686,6 +692,7 @@ export class StorageService {
     };
 
     setItem(STORAGE_KEYS.TICKETS, tickets);
+    FirestoreSyncService.syncTicket(tickets[index]);
 
     const currentUser = this.getCurrentUser();
     this.addHistoryLog(
@@ -719,6 +726,7 @@ export class StorageService {
     };
 
     setItem(STORAGE_KEYS.TICKETS, tickets);
+    FirestoreSyncService.syncTicket(tickets[index]);
     this.enqueueSyncOperation('UPDATE_TICKET', tickets[index]);
     return tickets[index];
   }
@@ -775,6 +783,7 @@ export class StorageService {
     };
 
     setItem(STORAGE_KEYS.TICKETS, tickets);
+    FirestoreSyncService.syncTicket(tickets[index]);
 
     // Update asset status back to 'شغال'
     const assets = this.getAssets();
@@ -783,6 +792,7 @@ export class StorageService {
       assets[assetIdx].status = 'شغال';
       assets[assetIdx].updatedAt = now.toISOString();
       setItem(STORAGE_KEYS.ASSETS, assets);
+      FirestoreSyncService.syncAsset(assets[assetIdx]);
     }
 
     const currentUser = this.getCurrentUser();
@@ -814,6 +824,7 @@ export class StorageService {
     if (!cats.includes(cat.trim())) {
       cats.push(cat.trim());
       setItem(STORAGE_KEYS.CATEGORIES, cats);
+      FirestoreSyncService.syncCategories(cats);
     }
     return cats;
   }
@@ -829,6 +840,7 @@ export class StorageService {
 
     records.unshift(newRecord);
     setItem(STORAGE_KEYS.PERIODIC, records);
+    FirestoreSyncService.syncPeriodicRecord(newRecord);
 
     this.addHistoryLog(
       'صيانة دورية',

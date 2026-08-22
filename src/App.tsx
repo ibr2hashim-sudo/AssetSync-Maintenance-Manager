@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { Asset, MaintenanceTicket, PeriodicMaintenanceRecord, User } from './types';
 import { StorageService } from './services/storage';
+import { FirestoreSyncService } from './services/firestoreSync';
 import { Navbar } from './components/Navbar';
 import { DashboardView } from './components/DashboardView';
 import { AssetsView } from './components/AssetsView';
@@ -66,6 +67,11 @@ export default function App() {
   // Initial load & network listeners
   useEffect(() => {
     reloadData();
+
+    // Start real-time cloud sync across all devices
+    FirestoreSyncService.initRealtimeListeners(() => {
+      reloadData();
+    });
 
     const handleOnline = () => {
       setIsOnline(true);

@@ -17,6 +17,7 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import { StorageService } from '../services/storage';
+import { FirestoreSyncService } from '../services/firestoreSync';
 import { GoogleDriveService, GoogleDriveFile, DriveImageSyncReport } from '../services/googleDriveService';
 import { ExcelUtils } from '../utils/excelImportExport';
 
@@ -47,8 +48,25 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({ onClose, o
   const [driveImageProgress, setDriveImageProgress] = useState<{ current: number; total: number; fileName: string } | null>(null);
   const [driveImageReport, setDriveImageReport] = useState<DriveImageSyncReport | null>(null);
 
+  // Firestore Cloud Sync State
+  const [isSyncingFirestore, setIsSyncingFirestore] = useState(false);
+
   // File Inputs
   const excelComprehensiveInputRef = useRef<HTMLInputElement>(null);
+
+  const handlePushAllToFirestore = async () => {
+    setIsSyncingFirestore(true);
+    setSyncStatusMsg('جاري رفع ومزامنة جميع البيانات المحلية مع السحابة المركزية (Firebase)...');
+    try {
+      const res = await FirestoreSyncService.pushAllLocalDataToFirestore();
+      setSyncStatusMsg(res.message);
+      onRefresh();
+    } catch (err: any) {
+      setSyncStatusMsg(`خطأ في المزامنة السحابية: ${err?.message}`);
+    } finally {
+      setIsSyncingFirestore(false);
+    }
+  };
 
   useEffect(() => {
     const unsubscribe = GoogleDriveService.initAuth(
@@ -387,22 +405,52 @@ function doPost(e) {
               </span>
             </div>
             <div>
-              <span className="text-slate-400 block text-[11px]">العمليات المعلقة:</span>
-              <span
-                className={`font-bold font-mono ${
-                  pendingCount > 0 ? 'text-amber-600' : 'text-emerald-600'
-                }`}
-              >
-                {pendingCount} عملية بانتظار المزامنة
+              <span className="text-slate-400 block text-[11px]">المزامنة السحابية الحية:</span>
+              <span className="font-bold text-blue-700">
+                Firebase Firestore ⚡
               </span>
             </div>
             <div className="col-span-2 sm:col-span-1">
-              <span className="text-slate-400 block text-[11px]">آخر مزامنة ناجحة:</span>
-              <span className="font-semibold text-slate-700">
-                {syncConfig.lastSyncTimestamp
-                  ? new Date(syncConfig.lastSyncTimestamp).toLocaleTimeString('ar-EG')
-                  : 'لم تتم بعد'}
+              <span className="text-slate-400 block text-[11px]">مزامنة الأجهزة:</span>
+              <span className="font-semibold text-emerald-700 font-bold">
+                مزامنة فورية حية 🟢
               </span>
+            </div>
+          </div>
+
+          {/* ========================================================================= */}
+          {/* ⚡ 0. LIVE FIRESTORE CLOUD DATABASE SECTION */}
+          {/* ========================================================================= */}
+          <div className="p-4 rounded-2xl bg-gradient-to-br from-blue-50 via-indigo-50/40 to-white border border-blue-200 shadow-xs space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center">
+                  <Database className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-slate-900 text-sm">
+                    قاعدة البيانات السحابية المركزية الموحدة (Firebase Firestore)
+                  </h4>
+                  <p className="text-[11px] text-slate-500">
+                    مزامنة لحظية مباشرة وتلقائية بين كافة الأجهزة (الهواتف، أجهزة الفنيين، أجهزة المشرفين، والكمبيوتر)
+                  </p>
+                </div>
+              </div>
+              <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                متصل ونشط 🟢
+              </span>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={handlePushAllToFirestore}
+                disabled={isSyncingFirestore}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold transition-all shadow-xs disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncingFirestore ? 'animate-spin' : ''}`} />
+                <span>{isSyncingFirestore ? 'جاري رفع ومزامنة البيانات...' : 'رفع ومزامنة كامل البيانات الحالية إلى السحابة فوراً'}</span>
+              </button>
             </div>
           </div>
 
