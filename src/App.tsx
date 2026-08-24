@@ -116,7 +116,6 @@ export default function App() {
   if (!currentUser) {
     return (
       <LoginView
-        users={users.length > 0 ? users : StorageService.getUsers()}
         onLogin={(user) => {
           setCurrentUser(user);
           reloadData();

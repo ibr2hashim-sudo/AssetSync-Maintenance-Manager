@@ -7,22 +7,18 @@ import {
   EyeOff,
   LogIn,
   Shield,
-  Wrench,
-  Building2,
-  CheckCircle2,
   AlertCircle,
-  Sparkles,
   Cloud,
 } from 'lucide-react';
 import { User } from '../types';
 import { StorageService } from '../services/storage';
 
 interface LoginViewProps {
-  users: User[];
+  users?: User[];
   onLogin: (user: User) => void;
 }
 
-export const LoginView: React.FC<LoginViewProps> = ({ users, onLogin }) => {
+export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -49,12 +45,6 @@ export const LoginView: React.FC<LoginViewProps> = ({ users, onLogin }) => {
       setIsLoading(false);
       setErrorMessage(err?.message || 'فشل تسجيل الدخول، تأكد من صحة البيانات');
     }
-  };
-
-  const handleSelectQuickAccount = (u: User) => {
-    setUsername(u.username);
-    setPassword(u.password || '');
-    setErrorMessage('');
   };
 
   return (
@@ -163,58 +153,8 @@ export const LoginView: React.FC<LoginViewProps> = ({ users, onLogin }) => {
           </button>
         </form>
 
-        {/* Quick Accounts Helper */}
-        {users.length > 0 && (
-          <div className="pt-3 border-t border-slate-800/80 space-y-2">
-            <div className="flex items-center justify-between text-[11px] text-slate-400">
-              <span className="font-semibold">الحسابات المسجلة بالنظام:</span>
-              <span className="text-[10px] text-slate-500">انقر للتعبئة السريعة</span>
-            </div>
-            <div className="grid grid-cols-1 gap-1.5 max-h-36 overflow-y-auto pr-0.5">
-              {users.map((u) => {
-                const isSelected = username.toLowerCase() === u.username.toLowerCase();
-                return (
-                  <button
-                    key={u.id}
-                    type="button"
-                    onClick={() => handleSelectQuickAccount(u)}
-                    className={`p-2 rounded-xl text-right flex items-center justify-between transition-all border text-xs ${
-                      isSelected
-                        ? 'bg-blue-600/20 border-blue-500/50 text-blue-300'
-                        : 'bg-slate-950/50 border-slate-800/80 text-slate-300 hover:bg-slate-800/60 hover:text-white'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <div className="w-6 h-6 rounded-lg bg-slate-800 text-blue-400 flex items-center justify-center font-bold text-[11px]">
-                        {u.role === 'admin' ? (
-                          <Shield className="w-3.5 h-3.5" />
-                        ) : u.role === 'technician' ? (
-                          <Wrench className="w-3.5 h-3.5" />
-                        ) : (
-                          <Building2 className="w-3.5 h-3.5" />
-                        )}
-                      </div>
-                      <div>
-                        <span className="font-bold block text-slate-200">{u.fullName}</span>
-                        <span className="text-[10px] font-mono text-slate-500">@{u.username}</span>
-                      </div>
-                    </div>
-                    <span className="text-[10px] px-2 py-0.5 rounded-md bg-slate-800/80 text-slate-400 border border-slate-700/50">
-                      {u.role === 'admin'
-                        ? 'مدير'
-                        : u.role === 'technician'
-                        ? 'فني'
-                        : `مشرف ${u.assignedDepartment || ''}`}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
         {/* Footer Security Badges */}
-        <div className="pt-2 flex items-center justify-center gap-4 text-[10px] text-slate-500">
+        <div className="pt-2 flex items-center justify-center gap-4 text-[10px] text-slate-500 border-t border-slate-800/80">
           <div className="flex items-center gap-1">
             <Shield className="w-3.5 h-3.5 text-blue-500" />
             <span>نظام مشفر وآمن</span>

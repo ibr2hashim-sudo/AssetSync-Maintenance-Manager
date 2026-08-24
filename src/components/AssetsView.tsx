@@ -379,8 +379,8 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
             </>
           )}
 
-          {/* Report Issuance / Exports: Admin & Technician Only */}
-          {(currentUser?.role === 'admin' || currentUser?.role === 'technician') && (
+          {/* Report Issuance / Exports: Admin Only */}
+          {currentUser?.role === 'admin' && (
             <>
               <button
                 onClick={() => ExcelUtils.exportComprehensiveDatabaseToXLSX(StorageService.getFullDataBackup())}
