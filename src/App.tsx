@@ -19,6 +19,7 @@ import { Asset, MaintenanceTicket, PeriodicMaintenanceRecord, User } from './typ
 import { StorageService } from './services/storage';
 import { FirestoreSyncService } from './services/firestoreSync';
 import { Navbar } from './components/Navbar';
+import { LoginView } from './components/LoginView';
 import { DashboardView } from './components/DashboardView';
 import { AssetsView } from './components/AssetsView';
 import { MaintenanceTicketsView } from './components/MaintenanceTicketsView';
@@ -110,6 +111,19 @@ export default function App() {
   const pendingTicketsCount = isStaffForTicketAlerts
     ? tickets.filter((t) => t.status === 'معلق').length
     : 0;
+
+  // 🚪 If no user is logged in, display the Login View as the first screen
+  if (!currentUser) {
+    return (
+      <LoginView
+        users={users.length > 0 ? users : StorageService.getUsers()}
+        onLogin={(user) => {
+          setCurrentUser(user);
+          reloadData();
+        }}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-100/70 text-slate-900 font-['Tajawal',sans-serif] text-right" dir="rtl">

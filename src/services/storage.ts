@@ -223,17 +223,60 @@ export class StorageService {
   static getCurrentUser(): User | null {
     const user = getItem<User | null>(STORAGE_KEYS.CURRENT_USER, null);
     if (!user || typeof user !== 'object' || !user.username) {
-      // Default to admin user for immediate readiness
-      const users = this.getUsers();
-      const adminUser = users.find((u) => u.username === 'admin') || DEFAULT_USERS[0];
-      this.setCurrentUser(adminUser);
-      return adminUser;
+      return null;
+    }
+    const users = this.getUsers();
+    const existing = users.find((u) => u.id === user.id || u.username.toLowerCase() === user.username.toLowerCase());
+    if (existing && existing.isActive !== false) {
+      return existing;
     }
     return user;
   }
 
   static setCurrentUser(user: User | null): void {
     setItem(STORAGE_KEYS.CURRENT_USER, user);
+  }
+
+  static login(username: string, password: string): User {
+    const users = this.getUsers();
+    const trimmedUsername = username.trim().toLowerCase();
+    const found = users.find((u) => u.username.toLowerCase() === trimmedUsername);
+
+    if (!found) {
+      throw new Error('اسم المستخدم غير صحيح أو غير مسجل في النظام');
+    }
+
+    if (found.isActive === false) {
+      throw new Error('تم تعطيل هذا الحساب، يرجى مراجعة مسؤول النظام (الأدمن)');
+    }
+
+    if (found.password && found.password !== password) {
+      throw new Error('كلمة المرور المدخلة غير صحيحة');
+    }
+
+    this.setCurrentUser(found);
+    this.addHistoryLog(
+      'مستخدمين',
+      `تسجيل دخول المستخدم: ${found.fullName} (${found.username})`,
+      `الدور: ${found.role}${found.assignedDepartment ? ` - قسم: ${found.assignedDepartment}` : ''}`,
+      found.fullName,
+      found.role
+    );
+    return found;
+  }
+
+  static logout(): void {
+    const currentUser = getItem<User | null>(STORAGE_KEYS.CURRENT_USER, null);
+    if (currentUser) {
+      this.addHistoryLog(
+        'مستخدمين',
+        `تسجيل خروج المستخدم: ${currentUser.fullName} (${currentUser.username})`,
+        `الدور: ${currentUser.role}`,
+        currentUser.fullName,
+        currentUser.role
+      );
+    }
+    setItem(STORAGE_KEYS.CURRENT_USER, null);
   }
 
   // Users Management
@@ -1096,11 +1139,6 @@ export class StorageService {
     );
 
     return { success: true, message: 'تمت إعادة ضبط المصنع ومسح جميع البيانات والعهد والصور بنجاح.' };
-  }
-
-  static logout(): void {
-    const defaultAdmin = DEFAULT_USERS[0];
-    this.setCurrentUser(defaultAdmin);
   }
 
   // Sync Queue & Offline-First
