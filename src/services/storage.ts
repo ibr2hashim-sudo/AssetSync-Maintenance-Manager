@@ -6,6 +6,11 @@ import {
   SyncConfig,
   User,
   ImageImportReport,
+  AuditSession,
+  AuditItem,
+  AuditItemStatus,
+  AuditItemAccessory,
+  AuditSessionStatus,
 } from '../types';
 import { FirestoreSyncService } from './firestoreSync';
 
@@ -19,6 +24,7 @@ const STORAGE_KEYS = {
   PENDING_QUEUE: 'asset_mgmt_pending_queue',
   CURRENT_USER: 'asset_mgmt_current_user',
   CATEGORIES: 'asset_mgmt_periodic_categories',
+  AUDIT_SESSIONS: 'asset_mgmt_audit_sessions',
 };
 
 // Initial default user: admin / admin
@@ -897,6 +903,656 @@ export class StorageService {
     return newRecord;
   }
 
+  // =========================================================================
+  // Inventory Audit Sessions Management (إدارة دورات وجلسات الجرد)
+  // =========================================================================
+  static getAuditSessions(): AuditSession[] {
+    const sessions = getItem<AuditSession[]>(STORAGE_KEYS.AUDIT_SESSIONS, []);
+    return Array.isArray(sessions) ? sessions : [];
+  }
+
+  static getAuditSessionById(id: string): AuditSession | undefined {
+    return this.getAuditSessions().find((s) => s.id === id);
+  }
+
+  static createAuditSession(
+    title: string,
+    targetDepartment: string,
+    createdBy: User,
+    auditedBy: string,
+    notes?: string
+  ): AuditSession {
+    const sessions = this.getAuditSessions();
+    const assets = this.getAssets();
+
+    // Filter target assets for this session
+    const targetAssets =
+      targetDepartment && targetDepartment !== 'all'
+        ? assets.filter((a) => a.mainDepartment === targetDepartment)
+        : assets;
+
+    const initialItems: AuditItem[] = targetAssets.map((asset) => ({
+      id: `item-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
+      assetId: asset.id,
+      customId: asset.customId,
+      deviceName: asset.deviceName,
+      mainDepartment: asset.mainDepartment,
+      subDepartment: asset.subDepartment || '',
+      model: asset.model || '',
+      serialNumber: asset.serialNumber || '',
+      expectedCustodian: asset.custodian || 'غير محدد',
+      expectedQuantity: Number(asset.currentQuantity ?? asset.bookQuantity ?? 1),
+      actualQuantity: 0,
+      status: 'معلق',
+      accessories: Array.isArray(asset.accessories)
+        ? asset.accessories.map((acc) => ({ name: String(acc), checked: false }))
+        : [],
+    }));
+
+    const now = new Date();
+    const sessionNumber = `AUD-${now.getFullYear()}-${String(sessions.length + 1).padStart(3, '0')}`;
+
+    const newSession: AuditSession = {
+      id: `audit-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+      sessionNumber,
+      title: title.trim(),
+      targetDepartment: targetDepartment || 'all',
+      status: 'قيد_الجرد',
+      startDate: now.toISOString().split('T')[0],
+      createdBy: {
+        userId: createdBy.id,
+        userName: createdBy.fullName,
+        role: createdBy.role,
+      },
+      auditedBy: auditedBy.trim() || createdBy.fullName,
+      notes: notes?.trim() || '',
+      totalExpected: initialItems.length,
+      totalMatched: 0,
+      totalMissing: 0,
+      totalRelocated: 0,
+      totalUnregistered: 0,
+      items: initialItems,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    };
+
+    sessions.unshift(newSession);
+    setItem(STORAGE_KEYS.AUDIT_SESSIONS, sessions);
+    FirestoreSyncService.syncAuditSession(newSession);
+
+    this.addHistoryLog(
+      'جرد',
+      `بدء دورة جرد جديدة (${newSession.sessionNumber})`,
+      `العنوان: ${newSession.title} - القسم المستهدف: ${targetDepartment === 'all' ? 'جميع الأقسام' : targetDepartment} - عدد الأصول المتوقعة: ${newSession.totalExpected}`,
+      createdBy.fullName,
+      createdBy.role
+    );
+
+    this.enqueueSyncOperation('CREATE_AUDIT_SESSION', newSession);
+    return newSession;
+  }
+
+  static scanItemInAuditSession(
+    sessionId: string,
+    scannedCode: string,
+    user: User,
+    notes?: string,
+    actualDept?: string,
+    actualCustodian?: string
+  ): {
+    success: boolean;
+    message: string;
+    item?: AuditItem;
+    isRelocated?: boolean;
+    isNew?: boolean;
+  } {
+    const sessions = this.getAuditSessions();
+    const sessionIndex = sessions.findIndex((s) => s.id === sessionId);
+    if (sessionIndex === -1) {
+      return { success: false, message: 'جلسة الجرد غير موجودة' };
+    }
+
+    const session = sessions[sessionIndex];
+    if (session.status === 'مكتمل_معتمد') {
+      return { success: false, message: 'لا يمكن التعديل على جلسة جرد مكتملة ومعتمدة' };
+    }
+
+    const cleanCode = scannedCode.trim().toLowerCase();
+    const norm = (s: string) =>
+      s
+        .toLowerCase()
+        .replace(/[\s\-_.:/()#]/g, '')
+        .replace(/[أإآ]/g, 'ا')
+        .replace(/ة/g, 'ه')
+        .replace(/ى/g, 'ي')
+        .trim();
+    const normCode = norm(cleanCode);
+
+    // 1. Check if the item is in the session's expected list
+    const itemIndex = session.items.findIndex(
+      (item) =>
+        item.customId.trim().toLowerCase() === cleanCode ||
+        norm(item.customId) === normCode ||
+        (item.serialNumber && norm(item.serialNumber) === normCode && norm(item.serialNumber) !== 'غيرمحدد')
+    );
+
+    const nowStr = new Date().toISOString();
+    const formattedTime = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
+
+    if (itemIndex !== -1) {
+      const item = session.items[itemIndex];
+      const isAlreadyMatched = item.status === 'مطابق';
+
+      session.items[itemIndex] = {
+        ...item,
+        status: 'مطابق',
+        actualQuantity: item.actualQuantity > 0 ? item.actualQuantity : (item.expectedQuantity || 1),
+        scannedAt: `${nowStr.split('T')[0]} ${formattedTime}`,
+        scannedBy: user.fullName,
+        notes: notes || item.notes || '',
+        actualDepartment: actualDept || item.mainDepartment,
+        actualCustodian: actualCustodian || item.expectedCustodian,
+      };
+
+      // Recalculate totals
+      this.recalculateSessionStats(session);
+      session.updatedAt = nowStr;
+      sessions[sessionIndex] = session;
+      setItem(STORAGE_KEYS.AUDIT_SESSIONS, sessions);
+      FirestoreSyncService.syncAuditSession(session);
+
+      return {
+        success: true,
+        message: isAlreadyMatched
+          ? `تم تحديث مسح الجهاز: ${item.deviceName} (${item.customId})`
+          : `تم مطابقة الجهاز بنجاح: ${item.deviceName} (${item.customId}) ✅`,
+        item: session.items[itemIndex],
+      };
+    }
+
+    // 2. Check if asset exists in system but belongs to another department or wasn't in target list (Relocated)
+    const allAssets = this.getAssets();
+    const existingAsset = allAssets.find(
+      (a) =>
+        a.customId.trim().toLowerCase() === cleanCode ||
+        norm(a.customId) === normCode ||
+        (a.serialNumber && norm(a.serialNumber) === normCode && norm(a.serialNumber) !== 'غيرمحدد')
+    );
+
+    if (existingAsset) {
+      // Check if already added as relocated
+      const existingRelocatedIdx = session.items.findIndex((i) => i.assetId === existingAsset.id || i.customId === existingAsset.customId);
+      if (existingRelocatedIdx !== -1) {
+        session.items[existingRelocatedIdx] = {
+          ...session.items[existingRelocatedIdx],
+          status: 'منقول',
+          actualQuantity: session.items[existingRelocatedIdx].actualQuantity > 0 ? session.items[existingRelocatedIdx].actualQuantity : 1,
+          scannedAt: `${nowStr.split('T')[0]} ${formattedTime}`,
+          scannedBy: user.fullName,
+          notes: notes || session.items[existingRelocatedIdx].notes || 'تم رصده في هذا الموقع',
+          actualDepartment: actualDept || (session.targetDepartment !== 'all' ? session.targetDepartment : existingAsset.mainDepartment),
+          actualCustodian: actualCustodian || existingAsset.custodian,
+        };
+      } else {
+        const relocatedItem: AuditItem = {
+          id: `item-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
+          assetId: existingAsset.id,
+          customId: existingAsset.customId,
+          deviceName: existingAsset.deviceName,
+          mainDepartment: existingAsset.mainDepartment,
+          subDepartment: existingAsset.subDepartment || '',
+          model: existingAsset.model || '',
+          serialNumber: existingAsset.serialNumber || '',
+          expectedCustodian: existingAsset.custodian || 'غير محدد',
+          expectedQuantity: Number(existingAsset.currentQuantity ?? 1),
+          actualQuantity: 1,
+          status: 'منقول',
+          scannedAt: `${nowStr.split('T')[0]} ${formattedTime}`,
+          scannedBy: user.fullName,
+          notes: notes || `أصل منقول من قسم: ${existingAsset.mainDepartment}`,
+          actualDepartment: actualDept || (session.targetDepartment !== 'all' ? session.targetDepartment : existingAsset.mainDepartment),
+          actualCustodian: actualCustodian || existingAsset.custodian,
+          accessories: Array.isArray(existingAsset.accessories)
+            ? existingAsset.accessories.map((acc) => ({ name: String(acc), checked: false }))
+            : [],
+        };
+        session.items.push(relocatedItem);
+      }
+
+      this.recalculateSessionStats(session);
+      session.updatedAt = nowStr;
+      sessions[sessionIndex] = session;
+      setItem(STORAGE_KEYS.AUDIT_SESSIONS, sessions);
+      FirestoreSyncService.syncAuditSession(session);
+
+      return {
+        success: true,
+        message: `تنبيه: الجهاز [${existingAsset.deviceName} - ID: ${existingAsset.customId}] مسجل بقسم (${existingAsset.mainDepartment}) وتم رصده هنا كأصل منقول 🔄`,
+        isRelocated: true,
+        item: session.items[session.items.length - 1],
+      };
+    }
+
+    // 3. Unregistered device found
+    return {
+      success: false,
+      isNew: true,
+      message: `الكود [${scannedCode}] غير مسجل في النظام. هل ترغب بتسجيله كجهاز جديد غير مقيد؟`,
+    };
+  }
+
+  static addUnregisteredItemToAudit(
+    sessionId: string,
+    customId: string,
+    deviceName: string,
+    mainDept: string,
+    subDept: string,
+    custodian: string,
+    user: User,
+    notes?: string,
+    actualQuantity: number = 1,
+    accessories: string[] = [],
+    model: string = '',
+    serialNumber: string = ''
+  ): { success: boolean; message: string; item?: AuditItem } {
+    const sessions = this.getAuditSessions();
+    const sessionIndex = sessions.findIndex((s) => s.id === sessionId);
+    if (sessionIndex === -1) {
+      return { success: false, message: 'جلسة الجرد غير موجودة' };
+    }
+
+    const session = sessions[sessionIndex];
+    const nowStr = new Date().toISOString();
+    const formattedTime = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
+
+    const newItem: AuditItem = {
+      id: `item-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
+      customId: customId.trim(),
+      deviceName: deviceName.trim(),
+      mainDepartment: mainDept.trim() || (session.targetDepartment !== 'all' ? session.targetDepartment : 'عام'),
+      subDepartment: subDept.trim(),
+      model: model.trim(),
+      serialNumber: serialNumber.trim(),
+      expectedCustodian: 'غير مقيد مسبقاً',
+      expectedQuantity: 0,
+      actualQuantity: Math.max(1, Number(actualQuantity || 1)),
+      status: 'جديد_غير_مسجل',
+      scannedAt: `${nowStr.split('T')[0]} ${formattedTime}`,
+      scannedBy: user.fullName,
+      actualDepartment: mainDept.trim() || (session.targetDepartment !== 'all' ? session.targetDepartment : 'عام'),
+      actualCustodian: custodian.trim() || 'غير محدد',
+      notes: notes || 'تم اكتشافه أثناء الجرد وغير مقيد في النظام',
+      accessories: accessories.map((name) => ({ name: String(name).trim(), checked: true })),
+    };
+
+    session.items.push(newItem);
+    this.recalculateSessionStats(session);
+    session.updatedAt = nowStr;
+    sessions[sessionIndex] = session;
+    setItem(STORAGE_KEYS.AUDIT_SESSIONS, sessions);
+    FirestoreSyncService.syncAuditSession(session);
+
+    return {
+      success: true,
+      message: `تمت إضافة الأصل غير المقيد للجرد: ${newItem.deviceName} (${newItem.customId}) ➕`,
+      item: newItem,
+    };
+  }
+
+  // Add brand new asset during audit and register in both assets registry & current audit session
+  static addNewAssetDuringAudit(
+    sessionId: string,
+    assetData: {
+      customId: string;
+      deviceName: string;
+      mainDepartment: string;
+      subDepartment?: string;
+      model?: string;
+      serialNumber?: string;
+      manufacturer?: string;
+      quantity: number;
+      accessories?: string[];
+      status?: 'شغال' | 'عاطل' | 'تالف';
+      custodian?: string;
+      notes?: string;
+    },
+    user: User
+  ): { success: boolean; message: string; asset?: Asset; item?: AuditItem } {
+    const sessions = this.getAuditSessions();
+    const sessionIndex = sessions.findIndex((s) => s.id === sessionId);
+    if (sessionIndex === -1) {
+      return { success: false, message: 'جلسة الجرد غير موجودة' };
+    }
+
+    const session = sessions[sessionIndex];
+    if (session.status === 'مكتمل_معتمد') {
+      return { success: false, message: 'لا يمكن إضافة أجهزة لجلسة جرد معتمدة ومغلقة' };
+    }
+
+    // Check duplicate custom ID in current session
+    const existingInSession = session.items.find(
+      (i) => i.customId.trim().toLowerCase() === assetData.customId.trim().toLowerCase()
+    );
+    if (existingInSession) {
+      return {
+        success: false,
+        message: `كود الجهاز (${assetData.customId}) موجود بالفعل داخل جلسة الجرد الحالية باسم (${existingInSession.deviceName})`,
+      };
+    }
+
+    // Save asset to main assets repository
+    let savedAsset: Asset;
+    try {
+      savedAsset = this.saveAsset({
+        customId: assetData.customId.trim(),
+        deviceName: assetData.deviceName.trim(),
+        mainDepartment: assetData.mainDepartment.trim(),
+        subDepartment: assetData.subDepartment?.trim() || 'عام',
+        model: assetData.model?.trim() || '',
+        serialNumber: assetData.serialNumber?.trim() || '',
+        manufacturer: assetData.manufacturer?.trim() || '',
+        currentQuantity: Math.max(1, Number(assetData.quantity || 1)),
+        bookQuantity: Math.max(1, Number(assetData.quantity || 1)),
+        accessories: assetData.accessories || [],
+        status: assetData.status || 'شغال',
+        custodian: assetData.custodian?.trim() || 'غير محدد',
+        notes: assetData.notes?.trim() || `أضيف أثناء دورة الجرد ${session.sessionNumber}`,
+      });
+    } catch (err: any) {
+      return { success: false, message: err?.message || 'تعذر حفظ الأصل' };
+    }
+
+    const nowStr = new Date().toISOString();
+    const formattedTime = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
+
+    const auditItem: AuditItem = {
+      id: `item-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
+      assetId: savedAsset.id,
+      customId: savedAsset.customId,
+      deviceName: savedAsset.deviceName,
+      mainDepartment: savedAsset.mainDepartment,
+      subDepartment: savedAsset.subDepartment,
+      model: savedAsset.model,
+      serialNumber: savedAsset.serialNumber,
+      expectedCustodian: savedAsset.custodian,
+      expectedQuantity: savedAsset.currentQuantity,
+      actualQuantity: savedAsset.currentQuantity,
+      status: 'مطابق',
+      scannedAt: `${nowStr.split('T')[0]} ${formattedTime}`,
+      scannedBy: user.fullName,
+      actualDepartment: savedAsset.mainDepartment,
+      actualCustodian: savedAsset.custodian,
+      notes: assetData.notes || `أصل جديد تم إضافته ومطابقته أثناء الجرد`,
+      accessories: (assetData.accessories || []).map((acc) => ({ name: acc, checked: true })),
+    };
+
+    session.items.push(auditItem);
+    session.totalExpected = session.totalExpected + 1;
+    this.recalculateSessionStats(session);
+    session.updatedAt = nowStr;
+    sessions[sessionIndex] = session;
+    setItem(STORAGE_KEYS.AUDIT_SESSIONS, sessions);
+    FirestoreSyncService.syncAuditSession(session);
+
+    this.addHistoryLog(
+      'جرد',
+      `إضافة جهاز جديد أثناء الجرد (${session.sessionNumber})`,
+      `تم إدخال ومطابقة الجهاز: ${savedAsset.deviceName} (ID: ${savedAsset.customId}) بالقسم: ${savedAsset.mainDepartment}`,
+      user.fullName,
+      user.role
+    );
+
+    return {
+      success: true,
+      message: `تم تسجيل وإضافة الجهاز بنجاح ومطابقته بالجرد: ${savedAsset.deviceName} (${savedAsset.customId}) 🎉`,
+      asset: savedAsset,
+      item: auditItem,
+    };
+  }
+
+  // Update actual quantity entered by auditor
+  static updateAuditItemQuantity(sessionId: string, itemId: string, actualQuantity: number): void {
+    const sessions = this.getAuditSessions();
+    const sessionIndex = sessions.findIndex((s) => s.id === sessionId);
+    if (sessionIndex === -1) return;
+
+    const session = sessions[sessionIndex];
+    const itemIndex = session.items.findIndex((i) => i.id === itemId || i.customId === itemId);
+    if (itemIndex === -1) return;
+
+    const currentUser = this.getCurrentUser();
+    const nowStr = new Date().toISOString();
+    const formattedTime = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
+    const parsedQty = Math.max(0, Number(actualQuantity || 0));
+
+    session.items[itemIndex].actualQuantity = parsedQty;
+    // Auto-update status if quantity was 0 and now > 0 while pending
+    if (session.items[itemIndex].status === 'معلق' && parsedQty > 0) {
+      session.items[itemIndex].status = 'مطابق';
+      session.items[itemIndex].scannedAt = `${nowStr.split('T')[0]} ${formattedTime}`;
+      session.items[itemIndex].scannedBy = currentUser?.fullName;
+    }
+
+    this.recalculateSessionStats(session);
+    session.updatedAt = nowStr;
+    sessions[sessionIndex] = session;
+    setItem(STORAGE_KEYS.AUDIT_SESSIONS, sessions);
+    FirestoreSyncService.syncAuditSession(session);
+  }
+
+  // Update accessories checklist for an item
+  static updateAuditItemAccessories(
+    sessionId: string,
+    itemId: string,
+    accessories: AuditItemAccessory[]
+  ): void {
+    const sessions = this.getAuditSessions();
+    const sessionIndex = sessions.findIndex((s) => s.id === sessionId);
+    if (sessionIndex === -1) return;
+
+    const session = sessions[sessionIndex];
+    const itemIndex = session.items.findIndex((i) => i.id === itemId || i.customId === itemId);
+    if (itemIndex === -1) return;
+
+    session.items[itemIndex].accessories = accessories;
+    session.updatedAt = new Date().toISOString();
+    sessions[sessionIndex] = session;
+    setItem(STORAGE_KEYS.AUDIT_SESSIONS, sessions);
+    FirestoreSyncService.syncAuditSession(session);
+  }
+
+  // Update note for an item
+  static updateAuditItemNote(sessionId: string, itemId: string, note: string): void {
+    const sessions = this.getAuditSessions();
+    const sessionIndex = sessions.findIndex((s) => s.id === sessionId);
+    if (sessionIndex === -1) return;
+
+    const session = sessions[sessionIndex];
+    const itemIndex = session.items.findIndex((i) => i.id === itemId || i.customId === itemId);
+    if (itemIndex === -1) return;
+
+    session.items[itemIndex].notes = note.trim();
+    session.updatedAt = new Date().toISOString();
+    sessions[sessionIndex] = session;
+    setItem(STORAGE_KEYS.AUDIT_SESSIONS, sessions);
+    FirestoreSyncService.syncAuditSession(session);
+  }
+
+  static updateAuditItemStatus(
+    sessionId: string,
+    itemId: string,
+    status: AuditItemStatus,
+    notes?: string
+  ): void {
+    const sessions = this.getAuditSessions();
+    const sessionIndex = sessions.findIndex((s) => s.id === sessionId);
+    if (sessionIndex === -1) return;
+
+    const session = sessions[sessionIndex];
+    const itemIndex = session.items.findIndex((i) => i.id === itemId || i.customId === itemId);
+    if (itemIndex === -1) return;
+
+    const currentUser = this.getCurrentUser();
+    const nowStr = new Date().toISOString();
+    const formattedTime = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
+
+    const currentItem = session.items[itemIndex];
+    let newActualQty = currentItem.actualQuantity;
+    if (status === 'مطابق' && newActualQty === 0) {
+      newActualQty = currentItem.expectedQuantity || 1;
+    } else if (status === 'مفقود') {
+      newActualQty = 0;
+    }
+
+    session.items[itemIndex] = {
+      ...currentItem,
+      status,
+      actualQuantity: newActualQty,
+      scannedAt: status !== 'معلق' ? `${nowStr.split('T')[0]} ${formattedTime}` : undefined,
+      scannedBy: status !== 'معلق' ? currentUser?.fullName : undefined,
+      notes: notes !== undefined ? notes : session.items[itemIndex].notes,
+    };
+
+    this.recalculateSessionStats(session);
+    session.updatedAt = nowStr;
+    sessions[sessionIndex] = session;
+    setItem(STORAGE_KEYS.AUDIT_SESSIONS, sessions);
+    FirestoreSyncService.syncAuditSession(session);
+  }
+
+  private static recalculateSessionStats(session: AuditSession): void {
+    let matched = 0;
+    let missing = 0;
+    let relocated = 0;
+    let unregistered = 0;
+
+    session.items.forEach((item) => {
+      if (item.status === 'مطابق') matched++;
+      else if (item.status === 'مفقود') missing++;
+      else if (item.status === 'منقول') relocated++;
+      else if (item.status === 'جديد_غير_مسجل') unregistered++;
+    });
+
+    session.totalMatched = matched;
+    session.totalMissing = missing;
+    session.totalRelocated = relocated;
+    session.totalUnregistered = unregistered;
+  }
+
+  static finalizeAuditSession(
+    sessionId: string,
+    applyReconciliationToAssets: boolean,
+    user: User
+  ): { success: boolean; message: string } {
+    const sessions = this.getAuditSessions();
+    const sessionIndex = sessions.findIndex((s) => s.id === sessionId);
+    if (sessionIndex === -1) {
+      return { success: false, message: 'جلسة الجرد غير موجودة' };
+    }
+
+    const session = sessions[sessionIndex];
+    const nowStr = new Date().toISOString();
+
+    // Mark any remaining 'معلق' items as 'مفقود' automatically
+    session.items = session.items.map((item) => {
+      if (item.status === 'معلق') {
+        return { ...item, status: 'مفقود', notes: item.notes || 'لم يتم العثور عليه أثناء دورة الجرد' };
+      }
+      return item;
+    });
+
+    this.recalculateSessionStats(session);
+    session.status = 'مكتمل_معتمد';
+    session.completedDate = nowStr.split('T')[0];
+    session.updatedAt = nowStr;
+
+    sessions[sessionIndex] = session;
+    setItem(STORAGE_KEYS.AUDIT_SESSIONS, sessions);
+    FirestoreSyncService.syncAuditSession(session);
+
+    // If reconciliation requested, update system assets
+    if (applyReconciliationToAssets) {
+      const assets = this.getAssets();
+      let updatedAssetsCount = 0;
+
+      session.items.forEach((item) => {
+        const assetIdx = assets.findIndex((a) => a.id === item.assetId || a.customId === item.customId);
+        if (assetIdx !== -1) {
+          if (item.status === 'منقول' && item.actualDepartment) {
+            assets[assetIdx].mainDepartment = item.actualDepartment;
+            if (item.actualCustodian) assets[assetIdx].custodian = item.actualCustodian;
+            assets[assetIdx].updatedAt = nowStr;
+            updatedAssetsCount++;
+          } else if (item.status === 'مفقود') {
+            assets[assetIdx].status = 'تالف';
+            assets[assetIdx].notes = `${assets[assetIdx].notes ? assets[assetIdx].notes + ' - ' : ''}مفقود بمحضر جرد ${session.sessionNumber}`;
+            assets[assetIdx].updatedAt = nowStr;
+            updatedAssetsCount++;
+          }
+        } else if (item.status === 'جديد_غير_مسجل') {
+          // Add new asset to system
+          const newAsset: Asset = {
+            id: `asset-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
+            customId: item.customId,
+            deviceName: item.deviceName,
+            mainDepartment: item.actualDepartment || item.mainDepartment,
+            subDepartment: item.subDepartment || 'عام',
+            currentQuantity: 1,
+            bookQuantity: 0,
+            difference: 1,
+            model: item.model || 'غير محدد',
+            serialNumber: item.serialNumber || 'غير محدد',
+            manufacturer: 'غير محدد',
+            accessories: [],
+            status: 'شغال',
+            custodian: item.actualCustodian || 'غير محدد',
+            notes: `تم قيده بموجب دورة جرد ${session.sessionNumber}`,
+            createdAt: nowStr,
+            updatedAt: nowStr,
+          };
+          assets.push(newAsset);
+          FirestoreSyncService.syncAsset(newAsset);
+          updatedAssetsCount++;
+        }
+      });
+
+      if (updatedAssetsCount > 0) {
+        setItem(STORAGE_KEYS.ASSETS, assets);
+      }
+    }
+
+    this.addHistoryLog(
+      'جرد',
+      `اعتماد وإغلاق محضر الجرد (${session.sessionNumber})`,
+      `النتيجة: ${session.totalMatched} مطابق، ${session.totalMissing} مفقود، ${session.totalRelocated} منقول، ${session.totalUnregistered} جديد. تم ${applyReconciliationToAssets ? 'تحديث وتطبيق المطابقة على سجلات الأصول' : 'الاحتفاظ بالسجلات دون تعديل الأصول'}.`,
+      user.fullName,
+      user.role
+    );
+
+    this.enqueueSyncOperation('FINALIZE_AUDIT_SESSION', session);
+    return {
+      success: true,
+      message: `تم اعتماد محضر الجرد بنجاح (${session.sessionNumber}) وتوثيق النتائج.`,
+    };
+  }
+
+  static deleteAuditSession(sessionId: string, user: User): void {
+    const sessions = this.getAuditSessions();
+    const session = sessions.find((s) => s.id === sessionId);
+    const updated = sessions.filter((s) => s.id !== sessionId);
+
+    setItem(STORAGE_KEYS.AUDIT_SESSIONS, updated);
+    FirestoreSyncService.deleteAuditSession(sessionId);
+
+    this.addHistoryLog(
+      'جرد',
+      `حذف جلسة جرد (${session?.sessionNumber || sessionId})`,
+      `العنوان: ${session?.title || ''} - تم الحذف بواسطة: ${user.fullName}`,
+      user.fullName,
+      user.role
+    );
+  }
+
   // History Logs
   static getHistory(): HistoryLog[] {
     const history = getItem<HistoryLog[]>(STORAGE_KEYS.HISTORY, []);
@@ -1119,6 +1775,7 @@ export class StorageService {
     localStorage.removeItem(STORAGE_KEYS.ASSETS);
     localStorage.removeItem(STORAGE_KEYS.TICKETS);
     localStorage.removeItem(STORAGE_KEYS.PERIODIC);
+    localStorage.removeItem(STORAGE_KEYS.AUDIT_SESSIONS);
     localStorage.removeItem(STORAGE_KEYS.HISTORY);
     localStorage.removeItem(STORAGE_KEYS.PENDING_QUEUE);
     localStorage.removeItem(STORAGE_KEYS.CATEGORIES);
@@ -1190,6 +1847,7 @@ export class StorageService {
       assets: this.getAssets(),
       tickets: this.getTickets(),
       periodicRecords: this.getPeriodicRecords(),
+      auditSessions: this.getAuditSessions(),
       users: this.getUsers(),
       history: this.getHistory(),
       categories: this.getPeriodicCategories(),
@@ -1208,6 +1866,9 @@ export class StorageService {
     }
     if (Array.isArray(backup.periodicRecords)) {
       setItem(STORAGE_KEYS.PERIODIC, backup.periodicRecords);
+    }
+    if (Array.isArray(backup.auditSessions)) {
+      setItem(STORAGE_KEYS.AUDIT_SESSIONS, backup.auditSessions);
     }
     if (Array.isArray(backup.users) && backup.users.length > 0) {
       setItem(STORAGE_KEYS.USERS, backup.users);

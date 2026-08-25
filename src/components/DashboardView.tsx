@@ -13,6 +13,7 @@ import {
   RefreshCw,
   TrendingUp,
   Activity,
+  ClipboardCheck,
 } from 'lucide-react';
 import { Asset, MaintenanceTicket, User, HistoryLog, PeriodicMaintenanceRecord } from '../types';
 
@@ -382,7 +383,37 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
           )}
 
-          {/* Card 4: إدارة المستخدمين (Admin only) */}
+          {/* Card 4: الجرد والمطابقة (Admin & Technician) */}
+          {(currentUser?.role === 'admin' || currentUser?.role === 'technician') && (
+            <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-sm hover:shadow-lg transition-all flex flex-col justify-between group">
+              <div>
+                <div className="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center mb-4 group-hover:bg-emerald-600 group-hover:text-white transition-colors">
+                  <ClipboardCheck className="w-6 h-6" />
+                </div>
+                <h4 className="text-base font-bold text-slate-900 group-hover:text-emerald-600 transition-colors">
+                  الجرد والمطابقة الدورية
+                </h4>
+                <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">
+                  إنشاء دورات جرد دورية وسنوية، مسح الباركود، رصد الفروقات والمفقودات، واستخراج واعتماد محاضر الجرد.
+                </p>
+              </div>
+
+              <div className="mt-5 pt-4 border-t border-slate-100 flex items-center justify-between">
+                <span className="text-xs font-semibold text-slate-400">
+                  دورات الجرد
+                </span>
+                <button
+                  onClick={() => onNavigate('audit')}
+                  className="flex items-center gap-1 text-xs font-bold text-emerald-600 hover:text-emerald-700 transition-colors"
+                >
+                  فتح الجرد
+                  <ArrowLeft className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Card 5: إدارة المستخدمين (Admin only) */}
           {currentUser?.role === 'admin' && (
             <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-sm hover:shadow-lg transition-all flex flex-col justify-between group">
               <div>

@@ -24,13 +24,14 @@ import { DashboardView } from './components/DashboardView';
 import { AssetsView } from './components/AssetsView';
 import { MaintenanceTicketsView } from './components/MaintenanceTicketsView';
 import { PeriodicMaintenanceView } from './components/PeriodicMaintenanceView';
+import { AuditView } from './components/AuditView';
 import { UserManagementView } from './components/UserManagementView';
 import { SyncSettingsModal } from './components/SyncSettingsModal';
 import { HistoryModal } from './components/HistoryModal';
 import { FactoryResetModal } from './components/FactoryResetModal';
 import { SwitchUserModal } from './components/SwitchUserModal';
 
-type ActiveView = 'dashboard' | 'assets' | 'tickets' | 'periodic' | 'users';
+type ActiveView = 'dashboard' | 'assets' | 'tickets' | 'periodic' | 'audit' | 'users';
 
 export default function App() {
   // Global State
@@ -236,6 +237,21 @@ export default function App() {
             </button>
           )}
 
+          {/* Inventory Audit (Admin & Tech only) */}
+          {(currentUser?.role === 'admin' || currentUser?.role === 'technician') && (
+            <button
+              onClick={() => setActiveView('audit')}
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl transition-all whitespace-nowrap ${
+                activeView === 'audit'
+                  ? 'bg-slate-900 text-white shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+              }`}
+            >
+              <UserCheck className="w-4 h-4 text-emerald-400" />
+              الجرد والمطابقة
+            </button>
+          )}
+
           {/* User Management (Admin only) */}
           {currentUser?.role === 'admin' && (
             <button
@@ -315,7 +331,16 @@ export default function App() {
           />
         )}
 
-        {/* 5. USER MANAGEMENT VIEW */}
+        {/* 5. INVENTORY AUDIT & RECONCILIATION VIEW (Admin & Tech only) */}
+        {activeView === 'audit' && (currentUser?.role === 'admin' || currentUser?.role === 'technician') && (
+          <AuditView
+            currentUser={currentUser}
+            assets={assets}
+            onRefresh={reloadData}
+          />
+        )}
+
+        {/* 6. USER MANAGEMENT VIEW */}
         {activeView === 'users' && currentUser?.role === 'admin' && (
           <UserManagementView
             currentUser={currentUser}

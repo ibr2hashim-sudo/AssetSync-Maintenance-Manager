@@ -8,7 +8,11 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { Asset, MaintenanceTicket, PeriodicMaintenanceRecord, User, HistoryLog } from '../types';
+import { Asset, MaintenanceTicket, PeriodicMaintenanceRecord, User, HistoryLog, AuditSession } from '../types';
+
+function cleanForFirestore<T>(obj: T): T {
+  return JSON.parse(JSON.stringify(obj, (_, v) => (v === undefined ? null : v)));
+}
 
 export class FirestoreSyncService {
   private static isSyncing = false;
@@ -79,7 +83,20 @@ export class FirestoreSyncService {
       }, (error) => console.error('Firestore users sync error:', error));
       this.unsubscribers.push(unsubUsers);
 
-      // 5. Periodic Categories listener
+      // 5. Audit Sessions listener
+      const unsubAudits = onSnapshot(collection(db, 'audit_sessions'), (snapshot) => {
+        if (!snapshot.empty) {
+          const remoteAudits: AuditSession[] = [];
+          snapshot.forEach((doc) => {
+            remoteAudits.push(doc.data() as AuditSession);
+          });
+          localStorage.setItem('asset_mgmt_audit_sessions', JSON.stringify(remoteAudits));
+          onDataChanged();
+        }
+      }, (error) => console.error('Firestore audit sessions sync error:', error));
+      this.unsubscribers.push(unsubAudits);
+
+      // 6. Periodic Categories listener
       const unsubCategories = onSnapshot(doc(db, 'settings', 'categories'), (snapshot) => {
         if (snapshot.exists()) {
           const data = snapshot.data();
@@ -125,9 +142,8 @@ export class FirestoreSyncService {
    */
   static async syncAsset(asset: Asset): Promise<void> {
     try {
-      // Store light version without large raw dataUrl if needed, or entire asset
       const docRef = doc(db, 'assets', asset.id);
-      await setDoc(docRef, asset, { merge: true });
+      await setDoc(docRef, cleanForFirestore(asset), { merge: true });
     } catch (err) {
       console.error('Error syncing asset to Firestore:', err);
     }
@@ -150,7 +166,7 @@ export class FirestoreSyncService {
   static async syncTicket(ticket: MaintenanceTicket): Promise<void> {
     try {
       const docRef = doc(db, 'tickets', ticket.id);
-      await setDoc(docRef, ticket, { merge: true });
+      await setDoc(docRef, cleanForFirestore(ticket), { merge: true });
     } catch (err) {
       console.error('Error syncing ticket to Firestore:', err);
     }
@@ -173,7 +189,7 @@ export class FirestoreSyncService {
   static async syncPeriodicRecord(record: PeriodicMaintenanceRecord): Promise<void> {
     try {
       const docRef = doc(db, 'periodic_records', record.id);
-      await setDoc(docRef, record, { merge: true });
+      await setDoc(docRef, cleanForFirestore(record), { merge: true });
     } catch (err) {
       console.error('Error syncing periodic record to Firestore:', err);
     }
@@ -191,12 +207,35 @@ export class FirestoreSyncService {
   }
 
   /**
+   * Push an audit session to Firestore
+   */
+  static async syncAuditSession(session: AuditSession): Promise<void> {
+    try {
+      const docRef = doc(db, 'audit_sessions', session.id);
+      await setDoc(docRef, cleanForFirestore(session), { merge: true });
+    } catch (err) {
+      console.error('Error syncing audit session to Firestore:', err);
+    }
+  }
+
+  /**
+   * Delete an audit session from Firestore
+   */
+  static async deleteAuditSession(sessionId: string): Promise<void> {
+    try {
+      await deleteDoc(doc(db, 'audit_sessions', sessionId));
+    } catch (err) {
+      console.error('Error deleting audit session from Firestore:', err);
+    }
+  }
+
+  /**
    * Push user to Firestore
    */
   static async syncUser(user: User): Promise<void> {
     try {
       const docRef = doc(db, 'users', user.id);
-      await setDoc(docRef, user, { merge: true });
+      await setDoc(docRef, cleanForFirestore(user), { merge: true });
     } catch (err) {
       console.error('Error syncing user to Firestore:', err);
     }
@@ -236,12 +275,14 @@ export class FirestoreSyncService {
       const assetsStr = localStorage.getItem('asset_mgmt_assets');
       const ticketsStr = localStorage.getItem('asset_mgmt_tickets');
       const periodicStr = localStorage.getItem('asset_mgmt_periodic');
+      const auditsStr = localStorage.getItem('asset_mgmt_audit_sessions');
       const usersStr = localStorage.getItem('asset_mgmt_users');
       const catStr = localStorage.getItem('asset_mgmt_periodic_categories');
 
       const assets: Asset[] = assetsStr ? JSON.parse(assetsStr) : [];
       const tickets: MaintenanceTicket[] = ticketsStr ? JSON.parse(ticketsStr) : [];
       const periodic: PeriodicMaintenanceRecord[] = periodicStr ? JSON.parse(periodicStr) : [];
+      const audits: AuditSession[] = auditsStr ? JSON.parse(auditsStr) : [];
       const users: User[] = usersStr ? JSON.parse(usersStr) : [];
       const categories: string[] = catStr ? JSON.parse(catStr) : [];
 
@@ -251,7 +292,7 @@ export class FirestoreSyncService {
         const chunk = assets.slice(i, i + 250);
         chunk.forEach((asset) => {
           const ref = doc(db, 'assets', asset.id);
-          batch.set(ref, asset, { merge: true });
+          batch.set(ref, cleanForFirestore(asset), { merge: true });
         });
         await batch.commit();
       }
@@ -262,7 +303,7 @@ export class FirestoreSyncService {
         const chunk = tickets.slice(i, i + 250);
         chunk.forEach((ticket) => {
           const ref = doc(db, 'tickets', ticket.id);
-          batch.set(ref, ticket, { merge: true });
+          batch.set(ref, cleanForFirestore(ticket), { merge: true });
         });
         await batch.commit();
       }
@@ -273,7 +314,18 @@ export class FirestoreSyncService {
         const chunk = periodic.slice(i, i + 250);
         chunk.forEach((p) => {
           const ref = doc(db, 'periodic_records', p.id);
-          batch.set(ref, p, { merge: true });
+          batch.set(ref, cleanForFirestore(p), { merge: true });
+        });
+        await batch.commit();
+      }
+
+      // Batch push audits
+      for (let i = 0; i < audits.length; i += 250) {
+        const batch = writeBatch(db);
+        const chunk = audits.slice(i, i + 250);
+        chunk.forEach((a) => {
+          const ref = doc(db, 'audit_sessions', a.id);
+          batch.set(ref, cleanForFirestore(a), { merge: true });
         });
         await batch.commit();
       }
@@ -283,7 +335,7 @@ export class FirestoreSyncService {
         const batch = writeBatch(db);
         users.forEach((u) => {
           const ref = doc(db, 'users', u.id);
-          batch.set(ref, u, { merge: true });
+          batch.set(ref, cleanForFirestore(u), { merge: true });
         });
         await batch.commit();
       }
@@ -299,7 +351,7 @@ export class FirestoreSyncService {
       this.isSyncing = false;
       return {
         success: true,
-        message: `تمت المزامنة السحابية بنجاح (${assets.length} أصل، ${tickets.length} بلاغ، ${periodic.length} صيانة دورية، ${users.length} مستخدم)`,
+        message: `تمت المزامنة السحابية بنجاح (${assets.length} أصل، ${tickets.length} بلاغ، ${periodic.length} صيانة دورية، ${audits.length} جلسة جرد، ${users.length} مستخدم)`,
       };
     } catch (err: any) {
       this.isSyncing = false;
@@ -313,7 +365,7 @@ export class FirestoreSyncService {
    */
   static async clearAllCloudData(): Promise<void> {
     try {
-      const collections = ['assets', 'tickets', 'periodic_records'];
+      const collections = ['assets', 'tickets', 'periodic_records', 'audit_sessions'];
       for (const col of collections) {
         const snap = await getDocs(collection(db, col));
         const batch = writeBatch(db);

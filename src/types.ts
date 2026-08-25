@@ -103,7 +103,7 @@ export interface HistoryLog {
   details: string;
   performedBy: string;
   userRole: string;
-  category: 'أصول' | 'صيانة' | 'صيانة دورية' | 'مستخدمين' | 'مزامنة' | 'نظام';
+  category: 'أصول' | 'صيانة' | 'صيانة دورية' | 'مستخدمين' | 'مزامنة' | 'نظام' | 'جرد';
 }
 
 export interface ImageImportReport {
@@ -123,4 +123,58 @@ export interface SyncConfig {
   googleDriveFolderId?: string;
   autoSyncEnabled: boolean;
   lastSyncTimestamp: string | null;
+}
+
+export type AuditItemStatus = 'مطابق' | 'مفقود' | 'منقول' | 'جديد_غير_مسجل' | 'معلق';
+export type AuditSessionStatus = 'قيد_الجرد' | 'مكتمل_معتمد' | 'ملغي';
+
+export interface AuditItemAccessory {
+  name: string;
+  checked: boolean;
+}
+
+export interface AuditItem {
+  id: string;
+  assetId?: string;
+  customId: string;
+  deviceName: string;
+  mainDepartment: string;
+  subDepartment: string;
+  model: string;
+  serialNumber: string;
+  expectedCustodian: string;
+  expectedQuantity: number;
+  actualQuantity: number;
+  status: AuditItemStatus;
+  scannedAt?: string;
+  scannedBy?: string;
+  notes?: string;
+  actualDepartment?: string;
+  actualCustodian?: string;
+  accessories?: AuditItemAccessory[];
+}
+
+export interface AuditSession {
+  id: string;
+  sessionNumber: string;
+  title: string;
+  targetDepartment: string; // 'all' or specific mainDepartment
+  status: AuditSessionStatus;
+  startDate: string;
+  completedDate?: string;
+  createdBy: {
+    userId: string;
+    userName: string;
+    role: UserRole;
+  };
+  auditedBy: string;
+  notes?: string;
+  totalExpected: number;
+  totalMatched: number;
+  totalMissing: number;
+  totalRelocated: number;
+  totalUnregistered: number;
+  items: AuditItem[];
+  createdAt: string;
+  updatedAt: string;
 }

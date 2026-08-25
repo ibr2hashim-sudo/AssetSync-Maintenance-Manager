@@ -15,6 +15,7 @@ import {
   Wrench,
   Package,
   Users as UsersIcon,
+  ClipboardCheck,
 } from 'lucide-react';
 import { User } from '../types';
 
@@ -139,6 +140,21 @@ export const Navbar: React.FC<NavbarProps> = ({
               >
                 <Building2 className="w-4 h-4" />
                 الصيانة الدورية
+              </button>
+            )}
+
+            {/* Inventory Audit: Admin and Technician only */}
+            {(currentUser?.role === 'admin' || currentUser?.role === 'technician') && (
+              <button
+                onClick={() => setActiveTab('audit')}
+                className={`px-3.5 py-1.5 rounded-lg text-sm font-medium transition-all flex items-center gap-1.5 ${
+                  activeTab === 'audit'
+                    ? 'bg-blue-600 text-white shadow-sm'
+                    : 'text-slate-300 hover:text-white hover:bg-slate-700/50'
+                }`}
+              >
+                <ClipboardCheck className="w-4 h-4 text-emerald-400" />
+                الجرد والمطابقة
               </button>
             )}
 
@@ -362,6 +378,16 @@ export const Navbar: React.FC<NavbarProps> = ({
               }`}
             >
               الصيانة الدورية
+            </button>
+          )}
+          {(currentUser?.role === 'admin' || currentUser?.role === 'technician') && (
+            <button
+              onClick={() => setActiveTab('audit')}
+              className={`px-3 py-1.5 rounded-lg font-medium whitespace-nowrap ${
+                activeTab === 'audit' ? 'bg-blue-600 text-white' : 'text-slate-400'
+              }`}
+            >
+              الجرد والمطابقة
             </button>
           )}
           {currentUser?.role === 'admin' && (
