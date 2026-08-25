@@ -1,6 +1,6 @@
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
-import { MaintenanceTicket } from '../types';
+import { MaintenanceTicket, AuditSession } from '../types';
 
 export class PDFReportGenerator {
   static async exportTicketToPDF(ticket: MaintenanceTicket, elementId: string): Promise<void> {
@@ -52,4 +52,78 @@ export class PDFReportGenerator {
       reportElement.style.display = originalDisplay;
     }
   }
+
+  /**
+   * Export Audit Session Report as Landscape A4 PDF
+   */
+  static async exportAuditReportToPDF(
+    session: AuditSession,
+    elementId: string,
+    departmentName?: string
+  ): Promise<void> {
+    const reportElement = document.getElementById(elementId);
+    if (!reportElement) {
+      throw new Error('تعذر العثور على محضر الجرد لطباعة الـ PDF');
+    }
+
+    try {
+      const canvas = await html2canvas(reportElement, {
+        scale: 2, // 2x high resolution
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#ffffff',
+        windowWidth: 1400, // Ensure wide landscape layout is captured
+      });
+
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF({
+        orientation: 'landscape',
+        unit: 'mm',
+        format: 'a4',
+      });
+
+      const pageWidth = pdf.internal.pageSize.getWidth(); // ~297mm
+      const pageHeight = pdf.internal.pageSize.getHeight(); // ~210mm
+      const margin = 6; // 6mm margin
+      const printableWidth = pageWidth - margin * 2;
+      const printableHeight = pageHeight - margin * 2;
+
+      // Calculate total height in mm at printable width
+      const totalImgHeightMm = (canvas.height * printableWidth) / canvas.width;
+
+      if (totalImgHeightMm <= printableHeight) {
+        // Single landscape page
+        pdf.addImage(imgData, 'PNG', margin, margin, printableWidth, totalImgHeightMm);
+      } else {
+        // Multi-page landscape slicing
+        let heightLeftMm = totalImgHeightMm;
+        let positionMm = margin;
+
+        pdf.addImage(imgData, 'PNG', margin, positionMm, printableWidth, totalImgHeightMm);
+        heightLeftMm -= printableHeight;
+
+        while (heightLeftMm > 0) {
+          positionMm -= printableHeight;
+          pdf.addPage('a4', 'landscape');
+          pdf.addImage(imgData, 'PNG', margin, positionMm, printableWidth, totalImgHeightMm);
+          heightLeftMm -= printableHeight;
+        }
+      }
+
+      // Safe file name: محضر جرد - رقم الجلسة - اسم القسم - تاريخ اليوم
+      const cleanDept = (departmentName || session.targetDepartment || 'كافة الأقسام').replace(
+        /[/\\?%*:|"<>]/g,
+        '-'
+      );
+      const cleanSessionNum = (session.sessionNumber || 'AUDIT').replace(/[/\\?%*:|"<>]/g, '-');
+      const dateStr = new Date().toISOString().split('T')[0];
+      const fileName = `محضر جرد - ${cleanSessionNum} - ${cleanDept} - ${dateStr}.pdf`;
+
+      pdf.save(fileName);
+    } catch (err: any) {
+      console.error('Audit PDF Export error:', err);
+      throw new Error(err?.message || 'حدث خطأ أثناء تصدير ملف الـ PDF');
+    }
+  }
 }
+

@@ -28,6 +28,7 @@ import { Asset, DeviceStatus, ImageImportReport, User } from '../types';
 import { StorageService } from '../services/storage';
 import { ExcelUtils } from '../utils/excelImportExport';
 import { AssetImage } from './AssetImage';
+import { BarcodeCameraScanner } from './BarcodeCameraScanner';
 
 interface AssetsViewProps {
   currentUser: User | null;
@@ -87,6 +88,9 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
 
   // Excel Import Status
   const [importNotice, setImportNotice] = useState<{ type: 'success' | 'error'; message: string; errors?: string[] } | null>(null);
+
+  // Camera Scanner Modal State
+  const [showCameraScanner, setShowCameraScanner] = useState(false);
 
   // Safe list
   const safeAssets = useMemo(() => (Array.isArray(assets) ? assets : []), [assets]);
@@ -149,8 +153,11 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
     // Apply Search
     if (searchTerm.trim()) {
       const q = searchTerm.toLowerCase();
-      list = list.filter(
-        (a) =>
+      const candidates = StorageService.normalizeCodeCandidates(searchTerm);
+
+      list = list.filter((a) => {
+        // Direct text includes
+        if (
           a.deviceName.toLowerCase().includes(q) ||
           a.customId.toLowerCase().includes(q) ||
           a.model.toLowerCase().includes(q) ||
@@ -159,7 +166,27 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
           a.custodian.toLowerCase().includes(q) ||
           a.mainDepartment.toLowerCase().includes(q) ||
           a.subDepartment.toLowerCase().includes(q)
-      );
+        ) {
+          return true;
+        }
+
+        // Candidate matches for serial number and custom ID
+        const customLower = a.customId.trim().toLowerCase();
+        const snLower = (a.serialNumber || '').trim().toLowerCase();
+        if (
+          candidates.some(
+            (c) =>
+              c.toLowerCase() === customLower ||
+              (snLower && c.toLowerCase() === snLower) ||
+              customLower.includes(c.toLowerCase()) ||
+              (snLower && snLower.includes(c.toLowerCase()))
+          )
+        ) {
+          return true;
+        }
+
+        return false;
+      });
     }
 
     // Apply Status Filter
@@ -510,23 +537,35 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
 
       {/* Search & Filter Bar */}
       <div className="bg-white p-4 rounded-xl border border-slate-200/80 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-3">
-        <div className="relative w-full sm:w-80">
-          <Search className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="بحث بالاسم، الـ ID، الموديل، السيريال، المستلم..."
-            className="w-full pl-3 pr-9 py-2 rounded-xl bg-slate-50 border border-slate-200 text-xs focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-          />
-          {searchTerm && (
-            <button
-              onClick={() => setSearchTerm('')}
-              className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          )}
+        <div className="flex items-center gap-2 w-full sm:w-auto flex-1 max-w-xl">
+          <div className="relative flex-1">
+            <Search className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="بحث بالاسم، كود الجهاز (ID)، السيريال (S.N)، الموديل..."
+              className="w-full pl-8 pr-9 py-2 rounded-xl bg-slate-50 border border-slate-200 text-xs focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-medium"
+            />
+            {searchTerm && (
+              <button
+                onClick={() => setSearchTerm('')}
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setShowCameraScanner(true)}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-bold transition-all shrink-0 shadow-xs"
+            title="مسح باركود أو QR Code للجهاز بالكاميرا للبحث المباشر"
+          >
+            <Camera className="w-4 h-4" />
+            <span className="hidden sm:inline">مسح بالكاميرا</span>
+          </button>
         </div>
 
         <div className="flex items-center gap-2 w-full sm:w-auto">
@@ -1205,6 +1244,17 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* Camera Barcode Scanner for Asset Search */}
+      <BarcodeCameraScanner
+        isOpen={showCameraScanner}
+        onClose={() => setShowCameraScanner(false)}
+        onScan={(scannedText) => {
+          setSearchTerm(scannedText);
+          setShowCameraScanner(false);
+        }}
+        title="مسح باركود / سيريال الجهاز للبحث الفوري"
+      />
     </div>
   );
 };

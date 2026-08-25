@@ -28,9 +28,16 @@ import {
   FileText,
   Building,
   UserCheck,
+  Camera,
+  Barcode,
+  Download,
+  Loader2,
+  Filter,
 } from 'lucide-react';
 import { Asset, AuditSession, AuditItem, AuditItemStatus, AuditItemAccessory, User } from '../types';
 import { StorageService } from '../services/storage';
+import { BarcodeCameraScanner } from './BarcodeCameraScanner';
+import { PDFReportGenerator } from '../utils/pdfExport';
 
 interface AuditViewProps {
   currentUser: User | null;
@@ -57,6 +64,8 @@ export const AuditView: React.FC<AuditViewProps> = ({
   const [scanCodeInput, setScanCodeInput] = useState('');
   const [scanQuantity, setScanQuantity] = useState<number>(1);
   const [scanFeedback, setScanFeedback] = useState<{ type: 'success' | 'warning' | 'error' | 'info'; message: string } | null>(null);
+  const [showCameraScanner, setShowCameraScanner] = useState(false);
+  const [continuousCameraScan, setContinuousCameraScan] = useState(true);
 
   // Add Brand New Asset during audit modal state
   const [showAddNewAssetModal, setShowAddNewAssetModal] = useState(false);
@@ -85,8 +94,11 @@ export const AuditView: React.FC<AuditViewProps> = ({
   const [showFinalizeModal, setShowFinalizeModal] = useState(false);
   const [applyReconciliation, setApplyReconciliation] = useState(true);
 
-  // Report & Print modal (Landscape)
+  // Report & Print modal (Landscape) & Department Isolation
   const [showPrintModal, setShowPrintModal] = useState(false);
+  const [printDepartmentFilter, setPrintDepartmentFilter] = useState<string>('all');
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [pdfExportError, setPdfExportError] = useState<string | null>(null);
 
   // Item filters within active session
   const [itemStatusFilter, setItemStatusFilter] = useState<'all' | AuditItemStatus>('all');
@@ -112,6 +124,94 @@ export const AuditView: React.FC<AuditViewProps> = ({
     if (!selectedSessionId) return null;
     return sessions.find((s) => s.id === selectedSessionId) || null;
   }, [sessions, selectedSessionId]);
+
+  // Set default print department filter when activeSession changes
+  useEffect(() => {
+    if (activeSession) {
+      if (activeSession.targetDepartment && activeSession.targetDepartment !== 'all') {
+        setPrintDepartmentFilter(activeSession.targetDepartment);
+      } else {
+        setPrintDepartmentFilter('all');
+      }
+    }
+  }, [activeSession?.id, activeSession?.targetDepartment]);
+
+  // All unique departments present in this audit session
+  const sessionAuditedDepartments = useMemo(() => {
+    if (!activeSession) return [];
+    const depts = new Set<string>();
+    if (activeSession.targetDepartment && activeSession.targetDepartment !== 'all') {
+      depts.add(activeSession.targetDepartment.trim());
+    }
+    activeSession.items.forEach((item) => {
+      if (item.actualDepartment && item.actualDepartment.trim()) {
+        depts.add(item.actualDepartment.trim());
+      }
+      if (item.mainDepartment && item.mainDepartment.trim()) {
+        depts.add(item.mainDepartment.trim());
+      }
+    });
+    return Array.from(depts).filter(Boolean).sort();
+  }, [activeSession]);
+
+  // Filtered items to be rendered in the Printable Landscape Report
+  const printItems = useMemo(() => {
+    if (!activeSession) return [];
+    if (printDepartmentFilter && printDepartmentFilter !== 'all') {
+      return activeSession.items.filter(
+        (i) =>
+          (i.actualDepartment && i.actualDepartment.trim() === printDepartmentFilter) ||
+          (i.mainDepartment && i.mainDepartment.trim() === printDepartmentFilter)
+      );
+    }
+    return activeSession.items;
+  }, [activeSession, printDepartmentFilter]);
+
+  // Dynamic statistics calculated specifically for the audited department in the report
+  const printStats = useMemo(() => {
+    const totalExpected = printItems.reduce((sum, i) => sum + (i.expectedQuantity || 1), 0);
+    const totalMatched = printItems
+      .filter((i) => i.status === 'مطابق')
+      .reduce((sum, i) => sum + (i.actualQuantity || 1), 0);
+    const totalRelocated = printItems
+      .filter((i) => i.status === 'منقول')
+      .reduce((sum, i) => sum + (i.actualQuantity || 1), 0);
+    const totalUnregistered = printItems
+      .filter((i) => i.status === 'جديد_غير_مسجل')
+      .reduce((sum, i) => sum + (i.actualQuantity || 1), 0);
+    const totalMissing = printItems
+      .filter((i) => i.status === 'مفقود' || i.status === 'معلق')
+      .reduce((sum, i) => sum + (i.expectedQuantity || 1), 0);
+
+    return {
+      totalExpected,
+      totalMatched,
+      totalRelocated,
+      totalUnregistered,
+      totalMissing,
+    };
+  }, [printItems]);
+
+  // Handler: Direct Landscape A4 PDF Export
+  const handleExportAuditPDF = async () => {
+    if (!activeSession) return;
+    setIsExportingPdf(true);
+    setPdfExportError(null);
+    try {
+      const deptName =
+        printDepartmentFilter !== 'all'
+          ? printDepartmentFilter
+          : activeSession.targetDepartment !== 'all'
+          ? activeSession.targetDepartment
+          : 'كافة الأقسام';
+      await PDFReportGenerator.exportAuditReportToPDF(activeSession, 'audit-printable-area', deptName);
+    } catch (err: any) {
+      console.error('Audit PDF Export Failed:', err);
+      setPdfExportError(err?.message || 'تعذر تصدير تقرير الجرد كملف PDF');
+    } finally {
+      setIsExportingPdf(false);
+    }
+  };
 
   // Unique departments for filter / create
   const uniqueDepartments = useMemo(() => {
@@ -166,13 +266,12 @@ export const AuditView: React.FC<AuditViewProps> = ({
   };
 
   // Handle Barcode / Manual Code Scan
-  const handleScanSubmit = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!scanCodeInput.trim() || !activeSession || !currentUser) return;
+  const handleProcessScannedCode = (codeToProcess: string, qty: number = scanQuantity) => {
+    if (!codeToProcess.trim() || !activeSession || !currentUser) return;
 
     const result = StorageService.scanItemInAuditSession(
       activeSession.id,
-      scanCodeInput.trim(),
+      codeToProcess.trim(),
       currentUser
     );
 
@@ -184,8 +283,8 @@ export const AuditView: React.FC<AuditViewProps> = ({
       }
 
       // If user entered a specific scan quantity > 1, update it immediately
-      if (result.item && scanQuantity > 1) {
-        StorageService.updateAuditItemQuantity(activeSession.id, result.item.id, scanQuantity);
+      if (result.item && qty > 1) {
+        StorageService.updateAuditItemQuantity(activeSession.id, result.item.id, qty);
       }
 
       setScanCodeInput('');
@@ -194,9 +293,9 @@ export const AuditView: React.FC<AuditViewProps> = ({
     } else {
       if (result.isNew) {
         setScanFeedback({ type: 'info', message: result.message });
-        setNewAssetCustomId(scanCodeInput.trim());
+        setNewAssetCustomId(codeToProcess.trim());
         setNewAssetMainDept(activeSession.targetDepartment !== 'all' ? activeSession.targetDepartment : '');
-        setNewAssetQuantity(scanQuantity);
+        setNewAssetQuantity(qty);
         setShowAddNewAssetModal(true);
       } else {
         setScanFeedback({ type: 'error', message: result.message });
@@ -207,6 +306,17 @@ export const AuditView: React.FC<AuditViewProps> = ({
     setTimeout(() => {
       scanInputRef.current?.focus();
     }, 100);
+  };
+
+  const handleScanSubmit = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!scanCodeInput.trim()) return;
+    handleProcessScannedCode(scanCodeInput, scanQuantity);
+  };
+
+  // Handle Camera Scan
+  const handleCameraScanResult = (decodedText: string) => {
+    handleProcessScannedCode(decodedText, scanQuantity);
   };
 
   // Handle Add New Asset during audit
@@ -892,9 +1002,18 @@ export const AuditView: React.FC<AuditViewProps> = ({
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <div className="flex items-center gap-2 text-sm font-bold text-slate-800">
                   <Scan className="w-5 h-5 text-emerald-600" />
-                  <span>محطة مسح الباركود والتحقق الفوري مع إدخال الكمية</span>
+                  <span>محطة مسح الباركود والسيريال والتحقق الفوري مع إدخال الكمية</span>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowCameraScanner(true)}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm shadow-emerald-600/20 transition-all hover:scale-105"
+                  >
+                    <Camera className="w-4 h-4" />
+                    مسح بالكاميرا (QR / Barcode)
+                  </button>
+
                   <button
                     type="button"
                     onClick={() => {
@@ -917,7 +1036,7 @@ export const AuditView: React.FC<AuditViewProps> = ({
                     type="text"
                     value={scanCodeInput}
                     onChange={(e) => setScanCodeInput(e.target.value)}
-                    placeholder="امسح الباركود عبر القارئ أو اكتب كود الجهاز (ID) أو الرقم التسلسلي واضغط Enter..."
+                    placeholder="امسح بقارئ الباركود، أو اكتب كود الجهاز (ID) أو الرقم التسلسلي (S.N) واضغط Enter..."
                     className="w-full px-4 py-3 text-sm font-bold text-slate-900 bg-slate-50 border-2 border-slate-300 rounded-2xl focus:bg-white focus:border-emerald-600 focus:outline-none transition-all placeholder:text-slate-400 placeholder:font-normal"
                     autoFocus
                   />
@@ -967,6 +1086,15 @@ export const AuditView: React.FC<AuditViewProps> = ({
                   تحقق ومطابقة ⏎
                 </button>
               </form>
+
+              {/* Supported Identifiers Hint */}
+              <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500 pt-1">
+                <span className="font-semibold text-slate-700">المطابقة التلقائية الذكية تدعم:</span>
+                <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-mono font-medium">كود الجهاز ID (مثل DEV-101)</span>
+                <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-mono font-medium">الرقم التسلسلي S/N (مثل SN-9988)</span>
+                <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-medium">قارئات الباركود اللاسلكية / السلكية</span>
+                <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 font-medium border border-emerald-200">كاميرا الهاتف أو التابلت</span>
+              </div>
 
               {/* Feedback Toast */}
               {scanFeedback && (
@@ -1963,31 +2091,97 @@ export const AuditView: React.FC<AuditViewProps> = ({
       {/* ========================================================================= */}
       {showPrintModal && activeSession && (
         <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-6xl w-full shadow-2xl border border-slate-100 text-right p-6 space-y-6 max-h-[95vh] overflow-y-auto print-landscape-container print:p-0 print:m-0 print:border-none print:shadow-none">
+          <div className="bg-white rounded-3xl max-w-7xl w-full shadow-2xl border border-slate-100 text-right p-6 space-y-6 max-h-[95vh] overflow-y-auto print-landscape-container print:p-0 print:m-0 print:border-none print:shadow-none">
             {/* Header controls (Hidden when printed) */}
-            <div className="flex items-center justify-between pb-4 border-b border-slate-200 print:hidden">
-              <div className="flex items-center gap-2">
-                <Printer className="w-5 h-5 text-emerald-600" />
-                <div>
-                  <h3 className="text-base font-bold text-slate-900">محضر الجرد والمطابقة المعتمد (بالعرض Landscape)</h3>
-                  <p className="text-xs text-slate-500">تم تجهيز التقرير بالوضع العرضي لضمان ظهور جميع الأعمدة والتفاصيل بوضوح</p>
+            <div className="space-y-4 pb-4 border-b border-slate-200 print:hidden">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center">
+                    <Printer className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900">محضر الجرد والمطابقة المعتمد (بالعرض Landscape)</h3>
+                    <p className="text-xs text-slate-500">تم تجهيز التقرير بالوضع العرضي لضمان ظهور جميع الأعمدة والتفاصيل بوضوح وتخصيص القسم المجرود</p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={handleExportAuditPDF}
+                    disabled={isExportingPdf}
+                    className="px-4 py-2.5 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white shadow-md flex items-center gap-2 transition-all cursor-pointer"
+                  >
+                    {isExportingPdf ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>جاري إنشاء ملف PDF بالعرض...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Download className="w-4 h-4" />
+                        <span>تصدير وتحميل PDF (Landscape A4)</span>
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    onClick={() => window.print()}
+                    className="px-4 py-2.5 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-md flex items-center gap-2 transition-all cursor-pointer"
+                  >
+                    <Printer className="w-4 h-4" />
+                    <span>طباعة فورية (Print)</span>
+                  </button>
+
+                  <button
+                    onClick={() => setShowPrintModal(false)}
+                    className="p-2.5 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => window.print()}
-                  className="px-5 py-2.5 rounded-xl text-xs font-bold bg-emerald-600 text-white hover:bg-emerald-700 shadow-md flex items-center gap-2"
-                >
-                  <Printer className="w-4 h-4" />
-                  طباعة المحضر بالعرض (PDF)
-                </button>
-                <button
-                  onClick={() => setShowPrintModal(false)}
-                  className="p-2 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100"
-                >
-                  <X className="w-5 h-5" />
-                </button>
+
+              {/* Department selector / filter toolbar for multi-department sessions */}
+              <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs">
+                <div className="flex items-center gap-2">
+                  <Filter className="w-4 h-4 text-emerald-600" />
+                  <span className="font-bold text-slate-700">القسم المراد طباعة تقرير جرده:</span>
+                  {activeSession.targetDepartment !== 'all' ? (
+                    <span className="px-3 py-1 bg-emerald-100 text-emerald-800 font-bold rounded-lg border border-emerald-300">
+                      {activeSession.targetDepartment} (قسم محدد لجلسة الجرد)
+                    </span>
+                  ) : (
+                    <select
+                      value={printDepartmentFilter}
+                      onChange={(e) => setPrintDepartmentFilter(e.target.value)}
+                      className="px-3 py-1.5 rounded-xl border border-slate-300 text-xs font-bold bg-white text-slate-800 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                    >
+                      <option value="all">كافة الأقسام المجرودة بالجلسة ({activeSession.items.length} أصل)</option>
+                      {sessionAuditedDepartments.map((dept) => {
+                        const count = activeSession.items.filter(
+                          (i) => (i.actualDepartment || i.mainDepartment) === dept || i.mainDepartment === dept
+                        ).length;
+                        return (
+                          <option key={dept} value={dept}>
+                            قسم: {dept} ({count} جهاز/أصل)
+                          </option>
+                        );
+                      })}
+                    </select>
+                  )}
+                </div>
+
+                <div className="text-slate-500 text-[11px]">
+                  عدد الأصول المعروضة بالمحضر: <strong className="text-slate-900 font-mono text-xs">{printItems.length}</strong> جهاز
+                </div>
               </div>
+
+              {pdfExportError && (
+                <div className="p-3 bg-red-50 text-red-700 rounded-xl text-xs flex items-center gap-2 border border-red-200">
+                  <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+                  <span>{pdfExportError}</span>
+                </div>
+              )}
             </div>
 
             {/* Printable Content (Styled for Landscape Print) */}
@@ -1995,15 +2189,27 @@ export const AuditView: React.FC<AuditViewProps> = ({
               {/* Report Header */}
               <div className="text-center pb-4 border-b-2 border-slate-900 space-y-1">
                 <div className="flex items-center justify-between text-xs text-slate-600 font-semibold mb-2">
-                  <div>المملكة العربية السعودية<br />إدارة الأصول والخدمات الهندسية</div>
-                  <div>
+                  <div className="text-right">
+                    <div>المملكة العربية السعودية</div>
+                    <div>الشؤون الصحية وإدارة الأصول والخدمات الهندسية</div>
+                    <div>نظام إدارة الأصول والعهد الفنية المتكامل</div>
+                  </div>
+                  <div className="text-center">
                     <h1 className="text-2xl font-black text-emerald-800">
                       محضر جرد ومطابقة الأصول والعهد الفنية
                     </h1>
+                    <div className="text-xs font-bold text-slate-700 mt-1">
+                      {printDepartmentFilter !== 'all'
+                        ? `القسم الذي تم جرده: [ ${printDepartmentFilter} ]`
+                        : activeSession.targetDepartment !== 'all'
+                        ? `القسم الذي تم جرده: [ ${activeSession.targetDepartment} ]`
+                        : 'تقرير الجرد الشامل لكافة الأقسام'}
+                    </div>
                   </div>
-                  <div>
-                    رقم المحضر: <strong className="text-slate-900">{activeSession.sessionNumber}</strong><br />
-                    تاريخ الإصدار: <strong>{new Date().toISOString().split('T')[0]}</strong>
+                  <div className="text-left font-mono">
+                    <div>رقم المحضر: <strong className="text-slate-900">{activeSession.sessionNumber}</strong></div>
+                    <div>تاريخ الإصدار: <strong>{new Date().toISOString().split('T')[0]}</strong></div>
+                    <div>وقت الطباعة: <strong>{new Date().toLocaleTimeString('ar-SA')}</strong></div>
                   </div>
                 </div>
               </div>
@@ -2015,9 +2221,13 @@ export const AuditView: React.FC<AuditViewProps> = ({
                   <strong className="text-slate-900 text-sm">{activeSession.title}</strong>
                 </div>
                 <div>
-                  <span className="text-slate-500 block">القسم المستهدف:</span>
-                  <strong className="text-slate-900 text-sm">
-                    {activeSession.targetDepartment === 'all' ? 'كافة الأقسام' : activeSession.targetDepartment}
+                  <span className="text-slate-500 block">القسم الذي تم جرده:</span>
+                  <strong className="text-emerald-800 text-sm font-black">
+                    {printDepartmentFilter !== 'all'
+                      ? printDepartmentFilter
+                      : activeSession.targetDepartment === 'all'
+                      ? 'كافة الأقسام المشمولة'
+                      : activeSession.targetDepartment}
                   </strong>
                 </div>
                 <div>
@@ -2032,92 +2242,154 @@ export const AuditView: React.FC<AuditViewProps> = ({
                 </div>
               </div>
 
-              {/* Statistics Matrix */}
+              {/* Statistics Matrix (Calculated specifically for the printed department) */}
               <div className="grid grid-cols-5 gap-2 text-center text-xs font-bold">
-                <div className="p-2 rounded-xl bg-slate-100 border border-slate-200">
-                  <div className="text-slate-600 text-[10px]">المتوقع دفترياً</div>
-                  <div className="text-base font-black text-slate-900 mt-0.5">{activeSession.totalExpected}</div>
+                <div className="p-2.5 rounded-xl bg-slate-100 border border-slate-300">
+                  <div className="text-slate-600 text-[10px]">المتوقع دفترياً بالقسم</div>
+                  <div className="text-lg font-black text-slate-900 mt-0.5">{printStats.totalExpected}</div>
                 </div>
-                <div className="p-2 rounded-xl bg-emerald-50 border border-emerald-300">
-                  <div className="text-emerald-800 text-[10px]">المطابق الفعلي</div>
-                  <div className="text-base font-black text-emerald-800 mt-0.5">{activeSession.totalMatched}</div>
+                <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-300">
+                  <div className="text-emerald-800 text-[10px]">المطابق الفعلي المرصود</div>
+                  <div className="text-lg font-black text-emerald-800 mt-0.5">{printStats.totalMatched}</div>
                 </div>
-                <div className="p-2 rounded-xl bg-amber-50 border border-amber-300">
+                <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-300">
                   <div className="text-amber-800 text-[10px]">منقول من قسم آخر</div>
-                  <div className="text-base font-black text-amber-800 mt-0.5">{activeSession.totalRelocated}</div>
+                  <div className="text-lg font-black text-amber-800 mt-0.5">{printStats.totalRelocated}</div>
                 </div>
-                <div className="p-2 rounded-xl bg-blue-50 border border-blue-300">
-                  <div className="text-blue-800 text-[10px]">فائض (أجهزة جديدة)</div>
-                  <div className="text-base font-black text-blue-800 mt-0.5">{activeSession.totalUnregistered}</div>
+                <div className="p-2.5 rounded-xl bg-blue-50 border border-blue-300">
+                  <div className="text-blue-800 text-[10px]">فائض (أجهزة جديدة غير مسجلة)</div>
+                  <div className="text-lg font-black text-blue-800 mt-0.5">{printStats.totalUnregistered}</div>
                 </div>
-                <div className="p-2 rounded-xl bg-red-50 border border-red-300">
-                  <div className="text-red-800 text-[10px]">العجز / المفقودات</div>
-                  <div className="text-base font-black text-red-800 mt-0.5">{activeSession.totalMissing}</div>
+                <div className="p-2.5 rounded-xl bg-red-50 border border-red-300">
+                  <div className="text-red-800 text-[10px]">العجز والمفقودات</div>
+                  <div className="text-lg font-black text-red-800 mt-0.5">{printStats.totalMissing}</div>
                 </div>
               </div>
 
-              {/* Complete Landscape Items Table */}
-              <div className="border border-slate-300 rounded-xl overflow-hidden">
+              {/* Complete Expanded Landscape Items Table */}
+              <div className="border border-slate-300 rounded-xl overflow-hidden shadow-xs">
                 <table className="w-full text-right text-[10px] border-collapse">
                   <thead className="bg-slate-100 text-slate-900 border-b border-slate-300 font-bold">
                     <tr>
-                      <th className="p-2 border-l border-slate-300 w-8">#</th>
-                      <th className="p-2 border-l border-slate-300">كود الأصل</th>
-                      <th className="p-2 border-l border-slate-300">اسم الجهاز والموديل</th>
-                      <th className="p-2 border-l border-slate-300">السيريال (S/N)</th>
+                      <th className="p-2 border-l border-slate-300 w-7 text-center">#</th>
+                      <th className="p-2 border-l border-slate-300">كود الأصل (ID)</th>
+                      <th className="p-2 border-l border-slate-300">اسم الجهاز والمعدة</th>
+                      <th className="p-2 border-l border-slate-300">الموديل</th>
+                      <th className="p-2 border-l border-slate-300">الرقم التسلسلي (S/N)</th>
                       <th className="p-2 border-l border-slate-300">القسم الدفتري</th>
                       <th className="p-2 border-l border-slate-300">القسم الفعلي</th>
+                      <th className="p-2 border-l border-slate-300">الغرفة / الفرعي</th>
                       <th className="p-2 border-l border-slate-300">صاحب العهدة</th>
                       <th className="p-2 border-l border-slate-300 text-center">كمية دفترية</th>
                       <th className="p-2 border-l border-slate-300 text-center">كمية فعلية</th>
                       <th className="p-2 border-l border-slate-300 text-center">الفارق</th>
-                      <th className="p-2 border-l border-slate-300">فحص التوابع</th>
-                      <th className="p-2 border-l border-slate-300 text-center">الحالة</th>
-                      <th className="p-2">ملاحظات الفحص</th>
+                      <th className="p-2 border-l border-slate-300">فحص التوابع والملحقات</th>
+                      <th className="p-2 border-l border-slate-300 text-center">الحالة الفنية</th>
+                      <th className="p-2 border-l border-slate-300 text-center">نتيجة الجرد</th>
+                      <th className="p-2">ملاحظات وتدقيق</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200">
-                    {activeSession.items.map((item, idx) => {
-                      const expQty = item.expectedQuantity ?? 1;
-                      const actQty = item.actualQuantity ?? 0;
-                      const diff = actQty - expQty;
+                    {printItems.length === 0 ? (
+                      <tr>
+                        <td colSpan={16} className="p-8 text-center text-slate-500 font-bold text-xs">
+                          لا توجد أصول مسجلة لهذا القسم ضمن دورة الجرد الحالية
+                        </td>
+                      </tr>
+                    ) : (
+                      printItems.map((item, idx) => {
+                        const expQty = item.expectedQuantity ?? 1;
+                        const actQty = item.actualQuantity ?? 0;
+                        const diff = actQty - expQty;
 
-                      const accessoriesText = (item.accessories || [])
-                        .map((a) => `${a.name} (${a.checked ? 'موجود' : 'ناقص'})`)
-                        .join('، ') || 'لا توجد توابع';
+                        const accessoriesText =
+                          (item.accessories || [])
+                            .map((a) => `${a.name} (${a.checked ? 'موجود' : 'ناقص'})`)
+                            .join('، ') || 'لا توجد توابع';
 
-                      return (
-                        <tr key={item.id} className="text-slate-800">
-                          <td className="p-2 border-l border-slate-200 text-slate-500 font-mono text-center">{idx + 1}</td>
-                          <td className="p-2 border-l border-slate-200 font-bold font-mono whitespace-nowrap">{item.customId}</td>
-                          <td className="p-2 border-l border-slate-200 font-medium">
-                            {item.deviceName} {item.model ? `(${item.model})` : ''}
-                          </td>
-                          <td className="p-2 border-l border-slate-200 font-mono text-slate-600 whitespace-nowrap">{item.serialNumber || '-'}</td>
-                          <td className="p-2 border-l border-slate-200">{item.mainDepartment}</td>
-                          <td className="p-2 border-l border-slate-200 font-bold">{item.actualDepartment || item.mainDepartment}</td>
-                          <td className="p-2 border-l border-slate-200">{item.actualCustodian || item.expectedCustodian}</td>
-                          <td className="p-2 border-l border-slate-200 text-center font-mono font-bold">{expQty}</td>
-                          <td className="p-2 border-l border-slate-200 text-center font-mono font-black">{actQty}</td>
-                          <td className="p-2 border-l border-slate-200 text-center font-mono font-bold">
-                            {diff === 0 ? '0' : diff > 0 ? `+${diff}` : `${diff}`}
-                          </td>
-                          <td className="p-2 border-l border-slate-200 text-[9px] text-slate-700">{accessoriesText}</td>
-                          <td className="p-2 border-l border-slate-200 text-center font-bold whitespace-nowrap">
-                            {item.status === 'مطابق'
-                              ? 'مطابق ✅'
-                              : item.status === 'منقول'
-                              ? 'أصل منقول 🔄'
-                              : item.status === 'جديد_غير_مسجل'
-                              ? 'فائض جديد ➕'
-                              : item.status === 'مفقود'
-                              ? 'مفقود / عجز ❌'
-                              : 'معلق'}
-                          </td>
-                          <td className="p-2 text-slate-600 text-[10px]">{item.notes || '-'}</td>
-                        </tr>
-                      );
-                    })}
+                        return (
+                          <tr
+                            key={item.id}
+                            className={`text-slate-800 ${
+                              idx % 2 === 1 ? 'bg-slate-50/70' : 'bg-white'
+                            }`}
+                          >
+                            <td className="p-2 border-l border-slate-200 text-slate-500 font-mono text-center">
+                              {idx + 1}
+                            </td>
+                            <td className="p-2 border-l border-slate-200 font-bold font-mono whitespace-nowrap text-slate-900">
+                              {item.customId}
+                            </td>
+                            <td className="p-2 border-l border-slate-200 font-medium">
+                              {item.deviceName}
+                            </td>
+                            <td className="p-2 border-l border-slate-200 text-slate-600 font-mono">
+                              {item.model || '-'}
+                            </td>
+                            <td className="p-2 border-l border-slate-200 font-mono text-slate-600 whitespace-nowrap">
+                              {item.serialNumber || '-'}
+                            </td>
+                            <td className="p-2 border-l border-slate-200">{item.mainDepartment}</td>
+                            <td className="p-2 border-l border-slate-200 font-bold text-emerald-800">
+                              {item.actualDepartment || item.mainDepartment}
+                            </td>
+                            <td className="p-2 border-l border-slate-200 text-slate-600">
+                              {item.actualSubDepartment || item.subDepartment || '-'}
+                            </td>
+                            <td className="p-2 border-l border-slate-200 text-slate-700">
+                              {item.actualCustodian || item.expectedCustodian || '-'}
+                            </td>
+                            <td className="p-2 border-l border-slate-200 text-center font-mono font-bold">
+                              {expQty}
+                            </td>
+                            <td className="p-2 border-l border-slate-200 text-center font-mono font-black text-slate-900">
+                              {actQty}
+                            </td>
+                            <td className="p-2 border-l border-slate-200 text-center font-mono font-bold">
+                              {diff === 0 ? (
+                                <span className="text-slate-600">0</span>
+                              ) : diff > 0 ? (
+                                <span className="text-blue-700">+{diff}</span>
+                              ) : (
+                                <span className="text-red-700">{diff}</span>
+                              )}
+                            </td>
+                            <td className="p-2 border-l border-slate-200 text-[9px] text-slate-700 leading-tight">
+                              {accessoriesText}
+                            </td>
+                            <td className="p-2 border-l border-slate-200 text-center whitespace-nowrap">
+                              <span
+                                className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
+                                  item.actualCondition === 'عاطل'
+                                    ? 'bg-red-100 text-red-800'
+                                    : item.actualCondition === 'تالف'
+                                    ? 'bg-slate-200 text-slate-800'
+                                    : 'bg-emerald-100 text-emerald-800'
+                                }`}
+                              >
+                                {item.actualCondition || 'شغال'}
+                              </span>
+                            </td>
+                            <td className="p-2 border-l border-slate-200 text-center font-bold whitespace-nowrap">
+                              {item.status === 'مطابق' ? (
+                                <span className="text-emerald-700">مطابق ✅</span>
+                              ) : item.status === 'منقول' ? (
+                                <span className="text-amber-700">أصل منقول 🔄</span>
+                              ) : item.status === 'جديد_غير_مسجل' ? (
+                                <span className="text-blue-700">فائض جديد ➕</span>
+                              ) : item.status === 'مفقود' ? (
+                                <span className="text-red-700">مفقود / عجز ❌</span>
+                              ) : (
+                                <span className="text-slate-500">معلق</span>
+                              )}
+                            </td>
+                            <td className="p-2 text-slate-600 text-[10px] leading-tight">
+                              {item.notes || '-'}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -2131,16 +2403,20 @@ export const AuditView: React.FC<AuditViewProps> = ({
                 </div>
 
                 <div className="space-y-6">
-                  <div className="font-bold text-slate-800">مشرف القسم المعني</div>
-                  <div className="text-slate-600 font-semibold">
-                    {activeSession.targetDepartment === 'all' ? 'مشرفو الأقسام المعنية' : `مشرف قسم ${activeSession.targetDepartment}`}
+                  <div className="font-bold text-slate-800">
+                    {printDepartmentFilter !== 'all'
+                      ? `مشرف قسم ${printDepartmentFilter}`
+                      : activeSession.targetDepartment !== 'all'
+                      ? `مشرف قسم ${activeSession.targetDepartment}`
+                      : 'مشرف القسم المعني'}
                   </div>
+                  <div className="text-slate-600 font-semibold">المشرف المسؤول</div>
                   <div className="border-t border-dashed border-slate-400 pt-1 text-slate-400">التوقيع والاعتماد</div>
                 </div>
 
                 <div className="space-y-6">
                   <div className="font-bold text-slate-800">مدير إدارة الأصول والصيانة</div>
-                  <div className="text-slate-600 font-semibold">{activeSession.createdBy.userName}</div>
+                  <div className="text-slate-600 font-semibold">{activeSession.createdBy?.userName || 'مدير الإدارة'}</div>
                   <div className="border-t border-dashed border-slate-400 pt-1 text-slate-400">الختم والتصديق الرسمي</div>
                 </div>
               </div>
@@ -2148,6 +2424,15 @@ export const AuditView: React.FC<AuditViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* Camera Barcode & QR Scanner Modal */}
+      <BarcodeCameraScanner
+        isOpen={showCameraScanner}
+        onClose={() => setShowCameraScanner(false)}
+        onScan={handleCameraScanResult}
+        title="مسح كود / سيريال الجهاز بالكاميرا"
+        continuous={continuousCameraScan}
+      />
     </div>
   );
 };

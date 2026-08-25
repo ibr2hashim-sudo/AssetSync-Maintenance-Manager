@@ -992,6 +992,106 @@ export class StorageService {
     return newSession;
   }
 
+  /**
+   * Universal Barcode/Serial/ID Cleaner and Normalizer
+   * Extracts clean ID and Serial candidates from scanned strings, URLs, QR JSONs, and barcode guns.
+   */
+  static normalizeCodeCandidates(raw: string): string[] {
+    if (!raw) return [];
+    let text = String(raw).trim();
+
+    // 1. Remove non-printable ASCII control characters (barcode reader CR/LF/STX/ETX etc.)
+    text = text.replace(/[\x00-\x1F\x7F]/g, '').trim();
+
+    // 2. Convert Eastern/Arabic numerals to Western Arabic (0-9)
+    const arabicDigits = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
+    const persianDigits = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
+    arabicDigits.forEach((d, i) => {
+      text = text.split(d).join(String(i));
+    });
+    persianDigits.forEach((d, i) => {
+      text = text.split(d).join(String(i));
+    });
+
+    const candidates = new Set<string>();
+    candidates.add(text);
+
+    // 3. Try parsing JSON if QR code contains structured object
+    if (text.startsWith('{') && text.endsWith('}')) {
+      try {
+        const parsed = JSON.parse(text);
+        if (parsed.customId) candidates.add(String(parsed.customId).trim());
+        if (parsed.serialNumber) candidates.add(String(parsed.serialNumber).trim());
+        if (parsed.id) candidates.add(String(parsed.id).trim());
+        if (parsed.code) candidates.add(String(parsed.code).trim());
+      } catch {
+        // ignore
+      }
+    }
+
+    // 4. Try parsing URL parameters or path segments
+    if (text.includes('://') || text.includes('?')) {
+      try {
+        const url = new URL(text.startsWith('http') ? text : `http://${text}`);
+        const idParam =
+          url.searchParams.get('id') || url.searchParams.get('customId') || url.searchParams.get('code');
+        const snParam =
+          url.searchParams.get('sn') || url.searchParams.get('serial') || url.searchParams.get('serialNumber');
+        if (idParam) candidates.add(idParam.trim());
+        if (snParam) candidates.add(snParam.trim());
+
+        const pathParts = url.pathname.split('/').filter(Boolean);
+        if (pathParts.length > 0) {
+          candidates.add(pathParts[pathParts.length - 1]);
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    // 5. Strip common prefixes: ID:, SN:, S/N:, Serial:, etc.
+    const prefixRegexes = [
+      /^(?:customid|custom_id|asset_id|assetid|asset|id|كود الجهاز|كود|رقم الجهاز|الرقم)[\s:=-]+(.+)$/i,
+      /^(?:serialnumber|serial_number|serial_no|serialno|serial|sn|s\/n|s\.n\.|s\.n|سيريال|الرقم التسلسلي|تسلسلي)[\s:=-]+(.+)$/i,
+    ];
+
+    for (const item of Array.from(candidates)) {
+      for (const regex of prefixRegexes) {
+        const match = item.match(regex);
+        if (match && match[1]) {
+          candidates.add(match[1].trim());
+        }
+      }
+    }
+
+    // 6. Add normalized versions
+    const normalizedList: string[] = [];
+    candidates.forEach((cand) => {
+      const trimmed = cand.trim();
+      if (trimmed) {
+        normalizedList.push(trimmed);
+        const norm = trimmed
+          .toLowerCase()
+          .replace(/[\s\-_.:/()#]/g, '')
+          .replace(/[أإآ]/g, 'ا')
+          .replace(/ة/g, 'ه')
+          .replace(/ى/g, 'ي');
+        if (norm && norm !== trimmed.toLowerCase()) {
+          normalizedList.push(norm);
+        }
+        // Also stripped leading zeros if purely numeric
+        if (/^\d+$/.test(norm)) {
+          const unpadded = String(parseInt(norm, 10));
+          if (unpadded !== norm) {
+            normalizedList.push(unpadded);
+          }
+        }
+      }
+    });
+
+    return Array.from(new Set(normalizedList));
+  }
+
   static scanItemInAuditSession(
     sessionId: string,
     scannedCode: string,
@@ -1017,24 +1117,63 @@ export class StorageService {
       return { success: false, message: 'لا يمكن التعديل على جلسة جرد مكتملة ومعتمدة' };
     }
 
-    const cleanCode = scannedCode.trim().toLowerCase();
-    const norm = (s: string) =>
+    // Extract all candidate codes (cleansed, prefix-stripped, normalized)
+    const candidateCodes = this.normalizeCodeCandidates(scannedCode);
+    if (candidateCodes.length === 0) {
+      return { success: false, message: 'كود المسح غير صالح أو فارغ' };
+    }
+
+    const norm = (s?: string) =>
       s
-        .toLowerCase()
-        .replace(/[\s\-_.:/()#]/g, '')
-        .replace(/[أإآ]/g, 'ا')
-        .replace(/ة/g, 'ه')
-        .replace(/ى/g, 'ي')
-        .trim();
-    const normCode = norm(cleanCode);
+        ? s
+            .toLowerCase()
+            .replace(/[\s\-_.:/()#]/g, '')
+            .replace(/[أإآ]/g, 'ا')
+            .replace(/ة/g, 'ه')
+            .replace(/ى/g, 'ي')
+            .trim()
+        : '';
+
+    const allAssets = this.getAssets();
+    const assetMapById = new Map<string, Asset>();
+    const assetMapByCustomId = new Map<string, Asset>();
+    allAssets.forEach((a) => {
+      if (a.id) assetMapById.set(a.id, a);
+      if (a.customId) assetMapByCustomId.set(a.customId.trim().toLowerCase(), a);
+    });
+
+    // Helper: checks if a field matches any candidate
+    const matchesCandidates = (val?: string): boolean => {
+      if (!val) return false;
+      const rawLower = val.trim().toLowerCase();
+      const normVal = norm(val);
+      if (!normVal || normVal === 'غيرمحدد' || normVal === 'لايوجد' || normVal === 'null' || normVal === 'undefined') {
+        return false;
+      }
+      return candidateCodes.some((c) => {
+        const cLower = c.toLowerCase();
+        const cNorm = norm(c);
+        return rawLower === cLower || normVal === cNorm;
+      });
+    };
 
     // 1. Check if the item is in the session's expected list
-    const itemIndex = session.items.findIndex(
-      (item) =>
-        item.customId.trim().toLowerCase() === cleanCode ||
-        norm(item.customId) === normCode ||
-        (item.serialNumber && norm(item.serialNumber) === normCode && norm(item.serialNumber) !== 'غيرمحدد')
-    );
+    const itemIndex = session.items.findIndex((item) => {
+      // Check direct properties
+      if (matchesCandidates(item.customId)) return true;
+      if (matchesCandidates(item.serialNumber)) return true;
+      if (matchesCandidates(item.id)) return true;
+      if (item.assetId && matchesCandidates(item.assetId)) return true;
+
+      // Cross-reference with underlying registered asset if serial number was missing in session item
+      const refAsset = (item.assetId && assetMapById.get(item.assetId)) || assetMapByCustomId.get(item.customId.trim().toLowerCase());
+      if (refAsset) {
+        if (matchesCandidates(refAsset.customId)) return true;
+        if (matchesCandidates(refAsset.serialNumber)) return true;
+      }
+
+      return false;
+    });
 
     const nowStr = new Date().toISOString();
     const formattedTime = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
@@ -1043,8 +1182,13 @@ export class StorageService {
       const item = session.items[itemIndex];
       const isAlreadyMatched = item.status === 'مطابق';
 
+      // If serial number was missing in session item but found in allAssets, backfill it
+      const refAsset = (item.assetId && assetMapById.get(item.assetId)) || assetMapByCustomId.get(item.customId.trim().toLowerCase());
+      const resolvedSerial = item.serialNumber || refAsset?.serialNumber || '';
+
       session.items[itemIndex] = {
         ...item,
+        serialNumber: resolvedSerial,
         status: 'مطابق',
         actualQuantity: item.actualQuantity > 0 ? item.actualQuantity : (item.expectedQuantity || 1),
         scannedAt: `${nowStr.split('T')[0]} ${formattedTime}`,
@@ -1064,33 +1208,39 @@ export class StorageService {
       return {
         success: true,
         message: isAlreadyMatched
-          ? `تم تحديث مسح الجهاز: ${item.deviceName} (${item.customId})`
-          : `تم مطابقة الجهاز بنجاح: ${item.deviceName} (${item.customId}) ✅`,
+          ? `تم تحديث مسح الجهاز: ${item.deviceName} (ID: ${item.customId}${resolvedSerial ? ` / S.N: ${resolvedSerial}` : ''})`
+          : `تم مطابقة الجهاز بنجاح: ${item.deviceName} (ID: ${item.customId}${resolvedSerial ? ` / S.N: ${resolvedSerial}` : ''}) ✅`,
         item: session.items[itemIndex],
       };
     }
 
     // 2. Check if asset exists in system but belongs to another department or wasn't in target list (Relocated)
-    const allAssets = this.getAssets();
-    const existingAsset = allAssets.find(
-      (a) =>
-        a.customId.trim().toLowerCase() === cleanCode ||
-        norm(a.customId) === normCode ||
-        (a.serialNumber && norm(a.serialNumber) === normCode && norm(a.serialNumber) !== 'غيرمحدد')
-    );
+    const existingAsset = allAssets.find((a) => {
+      if (matchesCandidates(a.customId)) return true;
+      if (matchesCandidates(a.serialNumber)) return true;
+      if (matchesCandidates(a.id)) return true;
+      return false;
+    });
 
     if (existingAsset) {
       // Check if already added as relocated
-      const existingRelocatedIdx = session.items.findIndex((i) => i.assetId === existingAsset.id || i.customId === existingAsset.customId);
+      const existingRelocatedIdx = session.items.findIndex(
+        (i) => i.assetId === existingAsset.id || i.customId === existingAsset.customId
+      );
       if (existingRelocatedIdx !== -1) {
         session.items[existingRelocatedIdx] = {
           ...session.items[existingRelocatedIdx],
           status: 'منقول',
-          actualQuantity: session.items[existingRelocatedIdx].actualQuantity > 0 ? session.items[existingRelocatedIdx].actualQuantity : 1,
+          actualQuantity:
+            session.items[existingRelocatedIdx].actualQuantity > 0
+              ? session.items[existingRelocatedIdx].actualQuantity
+              : 1,
           scannedAt: `${nowStr.split('T')[0]} ${formattedTime}`,
           scannedBy: user.fullName,
           notes: notes || session.items[existingRelocatedIdx].notes || 'تم رصده في هذا الموقع',
-          actualDepartment: actualDept || (session.targetDepartment !== 'all' ? session.targetDepartment : existingAsset.mainDepartment),
+          actualDepartment:
+            actualDept ||
+            (session.targetDepartment !== 'all' ? session.targetDepartment : existingAsset.mainDepartment),
           actualCustodian: actualCustodian || existingAsset.custodian,
         };
       } else {
@@ -1110,7 +1260,9 @@ export class StorageService {
           scannedAt: `${nowStr.split('T')[0]} ${formattedTime}`,
           scannedBy: user.fullName,
           notes: notes || `أصل منقول من قسم: ${existingAsset.mainDepartment}`,
-          actualDepartment: actualDept || (session.targetDepartment !== 'all' ? session.targetDepartment : existingAsset.mainDepartment),
+          actualDepartment:
+            actualDept ||
+            (session.targetDepartment !== 'all' ? session.targetDepartment : existingAsset.mainDepartment),
           actualCustodian: actualCustodian || existingAsset.custodian,
           accessories: Array.isArray(existingAsset.accessories)
             ? existingAsset.accessories.map((acc) => ({ name: String(acc), checked: false }))
@@ -1127,7 +1279,7 @@ export class StorageService {
 
       return {
         success: true,
-        message: `تنبيه: الجهاز [${existingAsset.deviceName} - ID: ${existingAsset.customId}] مسجل بقسم (${existingAsset.mainDepartment}) وتم رصده هنا كأصل منقول 🔄`,
+        message: `تنبيه: الجهاز [${existingAsset.deviceName} - ID: ${existingAsset.customId}${existingAsset.serialNumber ? ` / S.N: ${existingAsset.serialNumber}` : ''}] مسجل بقسم (${existingAsset.mainDepartment}) وتم رصده هنا كأصل منقول 🔄`,
         isRelocated: true,
         item: session.items[session.items.length - 1],
       };
@@ -1137,7 +1289,7 @@ export class StorageService {
     return {
       success: false,
       isNew: true,
-      message: `الكود [${scannedCode}] غير مسجل في النظام. هل ترغب بتسجيله كجهاز جديد غير مقيد؟`,
+      message: `الكود أو الرقم التسلسلي [${scannedCode}] غير مسجل في النظام. هل ترغب بتسجيله كجهاز جديد غير مقيد؟`,
     };
   }
 
