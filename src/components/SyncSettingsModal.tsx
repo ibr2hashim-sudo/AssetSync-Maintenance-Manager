@@ -50,6 +50,7 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({ onClose, o
 
   // Firestore Cloud Sync State
   const [isSyncingFirestore, setIsSyncingFirestore] = useState(false);
+  const [isPullingFirestore, setIsPullingFirestore] = useState(false);
 
   // File Inputs
   const excelComprehensiveInputRef = useRef<HTMLInputElement>(null);
@@ -65,6 +66,20 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({ onClose, o
       setSyncStatusMsg(`خطأ في المزامنة السحابية: ${err?.message}`);
     } finally {
       setIsSyncingFirestore(false);
+    }
+  };
+
+  const handlePullAllFromFirestore = async () => {
+    setIsPullingFirestore(true);
+    setSyncStatusMsg('جاري جلب وتحديث قاعدة البيانات السحابية بالكامل...');
+    try {
+      const res = await FirestoreSyncService.pullAllCloudDataToLocal();
+      setSyncStatusMsg(res.message);
+      onRefresh();
+    } catch (err: any) {
+      setSyncStatusMsg(`خطأ في استيراد البيانات: ${err?.message}`);
+    } finally {
+      setIsPullingFirestore(false);
     }
   };
 
@@ -428,11 +443,14 @@ function doPost(e) {
                   <Database className="w-4 h-4" />
                 </div>
                 <div>
-                  <h4 className="font-bold text-slate-900 text-sm">
-                    قاعدة البيانات السحابية المركزية الموحدة (Firebase Firestore)
+                  <h4 className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
+                    <span>قاعدة البيانات السحابية الموحدة (Firebase Firestore)</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 font-bold border border-blue-200">
+                      ⚡ نظام اقتصادي ذكي
+                    </span>
                   </h4>
                   <p className="text-[11px] text-slate-500">
-                    مزامنة لحظية مباشرة وتلقائية بين كافة الأجهزة (الهواتف، أجهزة الفنيين، أجهزة المشرفين، والكمبيوتر)
+                    مزامنة فورية حية مع توفير حتى 95% من الحصة اليومية عبر تقنية النبضات الدلتا الذكية
                   </p>
                 </div>
               </div>
@@ -441,15 +459,35 @@ function doPost(e) {
               </span>
             </div>
 
+            <div className="p-2.5 rounded-xl bg-white/80 border border-blue-100 flex items-center justify-between text-[11px]">
+              <div className="flex items-center gap-2 text-slate-700">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                <span>وضع التوفير النشط: يتم الاستماع لمستند النبضات الفوري ونقل التعديلات فقط</span>
+              </div>
+              <span className="font-bold text-blue-700">
+                تم توفير ~{FirestoreSyncService.getEstimatedSavedReads().toLocaleString('ar-EG')} قراءة اليوم 🛡️
+              </span>
+            </div>
+
             <div className="flex flex-wrap items-center gap-2 pt-1">
               <button
                 type="button"
                 onClick={handlePushAllToFirestore}
-                disabled={isSyncingFirestore}
-                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold transition-all shadow-xs disabled:opacity-50"
+                disabled={isSyncingFirestore || isPullingFirestore}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold transition-all shadow-xs disabled:opacity-50 text-xs"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isSyncingFirestore ? 'animate-spin' : ''}`} />
-                <span>{isSyncingFirestore ? 'جاري رفع ومزامنة البيانات...' : 'رفع ومزامنة كامل البيانات الحالية إلى السحابة فوراً'}</span>
+                <span>{isSyncingFirestore ? 'جاري رفع البيانات...' : 'رفع ومزامنة كامل البيانات المحلية إلى السحابة'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handlePullAllFromFirestore}
+                disabled={isSyncingFirestore || isPullingFirestore}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white hover:bg-slate-50 text-blue-800 border border-blue-300 font-bold transition-all shadow-xs disabled:opacity-50 text-xs"
+              >
+                <Download className={`w-3.5 h-3.5 ${isPullingFirestore ? 'animate-spin' : ''}`} />
+                <span>{isPullingFirestore ? 'جاري التحميل...' : 'جلب وتحديث قاعدة البيانات من السحابة'}</span>
               </button>
             </div>
           </div>

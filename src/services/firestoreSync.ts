@@ -2,265 +2,712 @@ import {
   collection,
   doc,
   setDoc,
+  getDoc,
   deleteDoc,
   onSnapshot,
   getDocs,
   writeBatch,
+  serverTimestamp,
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { Asset, MaintenanceTicket, PeriodicMaintenanceRecord, User, HistoryLog, AuditSession } from '../types';
+import { Asset, MaintenanceTicket, PeriodicMaintenanceRecord, User, AuditSession } from '../types';
 
 function cleanForFirestore<T>(obj: T): T {
   return JSON.parse(JSON.stringify(obj, (_, v) => (v === undefined ? null : v)));
 }
 
+interface RecentChange {
+  col: 'assets' | 'tickets' | 'periodic_records' | 'audit_sessions' | 'users' | 'settings';
+  id: string;
+  action: 'set' | 'delete';
+  timestamp: number;
+}
+
+interface SyncMetaDoc {
+  version: number;
+  lastUpdated: string;
+  recentChanges?: RecentChange[];
+  assetsCount?: number;
+  ticketsCount?: number;
+}
+
+const LOCAL_SYNC_STORAGE = {
+  LAST_PROCESSED_TS: 'eco_sync_last_processed_ts',
+  SAVED_READS_COUNT: 'eco_sync_saved_reads_count',
+  INITIALIZED_FLAG: 'eco_sync_initialized_v2',
+};
+
 export class FirestoreSyncService {
   private static isSyncing = false;
   private static isInitialized = false;
+  private static quotaExceeded = false;
+  private static quotaErrorMessage: string | null = null;
+  private static metaUnsubscriber: (() => void) | null = null;
+  private static onDataChangedCallback: (() => void) | null = null;
 
-  // Real-time listener unsubscribers
-  private static unsubscribers: (() => void)[] = [];
+  // Track estimated reads saved
+  private static sessionSavedReads = 0;
+
+  static isQuotaLimitReached(): boolean {
+    return this.quotaExceeded;
+  }
+
+  static getQuotaErrorMessage(): string | null {
+    return this.quotaErrorMessage;
+  }
+
+  static getEstimatedSavedReads(): number {
+    const saved = parseInt(localStorage.getItem(LOCAL_SYNC_STORAGE.SAVED_READS_COUNT) || '0', 10);
+    return saved + this.sessionSavedReads;
+  }
+
+  private static recordSavedReads(count: number) {
+    this.sessionSavedReads += count;
+    try {
+      const current = parseInt(localStorage.getItem(LOCAL_SYNC_STORAGE.SAVED_READS_COUNT) || '0', 10);
+      localStorage.setItem(LOCAL_SYNC_STORAGE.SAVED_READS_COUNT, String(current + count));
+    } catch {
+      // ignore
+    }
+  }
+
+  private static handleSyncError(context: string, error: any) {
+    const errorStr = error?.message || String(error || '');
+    if (
+      errorStr.includes('Quota exceeded') ||
+      errorStr.includes('quota metric') ||
+      errorStr.includes('resource-exhausted') ||
+      error?.code === 'resource-exhausted'
+    ) {
+      this.quotaExceeded = true;
+      this.quotaErrorMessage = errorStr;
+      console.warn(`[Firestore Quota Exceeded]: ${context} - Working in local storage mode.`);
+    } else {
+      console.error(`Firestore ${context} error:`, error);
+    }
+  }
 
   /**
-   * Initializes real-time listeners for all main collections
+   * Initialize Ultra-Economical Single-Document Real-time Sync
+   * Listens ONLY to 'settings/sync_meta' instead of streaming all full collections.
    */
   static initRealtimeListeners(onDataChanged: () => void) {
-    if (this.unsubscribers.length > 0) {
-      this.unsubscribers.forEach((unsub) => unsub());
-      this.unsubscribers = [];
+    this.onDataChangedCallback = onDataChanged;
+
+    if (this.metaUnsubscriber) {
+      this.metaUnsubscriber();
+      this.metaUnsubscriber = null;
     }
 
     try {
-      // 1. Assets listener
-      const unsubAssets = onSnapshot(collection(db, 'assets'), (snapshot) => {
-        if (!snapshot.empty) {
-          const remoteAssets: Asset[] = [];
-          snapshot.forEach((doc) => {
-            remoteAssets.push(doc.data() as Asset);
-          });
-          localStorage.setItem('asset_mgmt_assets', JSON.stringify(remoteAssets));
-          onDataChanged();
-        }
-      }, (error) => console.error('Firestore assets sync error:', error));
-      this.unsubscribers.push(unsubAssets);
+      // Single Document Listener for the entire system
+      const metaDocRef = doc(db, 'settings', 'sync_meta');
 
-      // 2. Tickets listener
-      const unsubTickets = onSnapshot(collection(db, 'tickets'), (snapshot) => {
-        if (!snapshot.empty) {
-          const remoteTickets: MaintenanceTicket[] = [];
-          snapshot.forEach((doc) => {
-            remoteTickets.push(doc.data() as MaintenanceTicket);
-          });
-          localStorage.setItem('asset_mgmt_tickets', JSON.stringify(remoteTickets));
-          onDataChanged();
-        }
-      }, (error) => console.error('Firestore tickets sync error:', error));
-      this.unsubscribers.push(unsubTickets);
-
-      // 3. Periodic Records listener
-      const unsubPeriodic = onSnapshot(collection(db, 'periodic_records'), (snapshot) => {
-        if (!snapshot.empty) {
-          const remotePeriodic: PeriodicMaintenanceRecord[] = [];
-          snapshot.forEach((doc) => {
-            remotePeriodic.push(doc.data() as PeriodicMaintenanceRecord);
-          });
-          localStorage.setItem('asset_mgmt_periodic', JSON.stringify(remotePeriodic));
-          onDataChanged();
-        }
-      }, (error) => console.error('Firestore periodic sync error:', error));
-      this.unsubscribers.push(unsubPeriodic);
-
-      // 4. Users listener
-      const unsubUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
-        if (!snapshot.empty) {
-          const remoteUsers: User[] = [];
-          snapshot.forEach((doc) => {
-            remoteUsers.push(doc.data() as User);
-          });
-          localStorage.setItem('asset_mgmt_users', JSON.stringify(remoteUsers));
-          onDataChanged();
-        }
-      }, (error) => console.error('Firestore users sync error:', error));
-      this.unsubscribers.push(unsubUsers);
-
-      // 5. Audit Sessions listener
-      const unsubAudits = onSnapshot(collection(db, 'audit_sessions'), (snapshot) => {
-        if (!snapshot.empty) {
-          const remoteAudits: AuditSession[] = [];
-          snapshot.forEach((doc) => {
-            remoteAudits.push(doc.data() as AuditSession);
-          });
-          localStorage.setItem('asset_mgmt_audit_sessions', JSON.stringify(remoteAudits));
-          onDataChanged();
-        }
-      }, (error) => console.error('Firestore audit sessions sync error:', error));
-      this.unsubscribers.push(unsubAudits);
-
-      // 6. Periodic Categories listener
-      const unsubCategories = onSnapshot(doc(db, 'settings', 'categories'), (snapshot) => {
-        if (snapshot.exists()) {
-          const data = snapshot.data();
-          if (data && Array.isArray(data.list)) {
-            localStorage.setItem('asset_mgmt_periodic_categories', JSON.stringify(data.list));
-            onDataChanged();
+      this.metaUnsubscriber = onSnapshot(
+        metaDocRef,
+        async (snapshot) => {
+          if (!snapshot.exists()) {
+            // First time setup: bootstrap if necessary
+            await this.bootstrapCloudData();
+            return;
           }
-        }
-      }, (error) => console.error('Firestore categories sync error:', error));
-      this.unsubscribers.push(unsubCategories);
 
-      // Bootstrap initial sync from Firestore or upload local data if Firestore is empty
-      this.bootstrapCloudData();
+          const meta = snapshot.data() as SyncMetaDoc;
+          await this.processIncomingDeltaChanges(meta);
+        },
+        (error) => {
+          this.handleSyncError('sync_meta listener', error);
+        }
+      );
+
+      // Verify if client needs initial data load (New Device or fresh browser)
+      this.checkAndPerformInitialLoad();
     } catch (err) {
-      console.error('Error starting Firestore listeners:', err);
+      this.handleSyncError('starting economic listener', err);
+    }
+  }
+
+  /**
+   * Processes targeted delta changes from the meta pulse document
+   */
+  private static async processIncomingDeltaChanges(meta: SyncMetaDoc): Promise<void> {
+    try {
+      const lastProcessedTs = parseInt(
+        localStorage.getItem(LOCAL_SYNC_STORAGE.LAST_PROCESSED_TS) || '0',
+        10
+      );
+
+      const recentChanges = Array.isArray(meta.recentChanges) ? meta.recentChanges : [];
+      if (recentChanges.length === 0) return;
+
+      // Filter changes that happened after our last local sync
+      const pendingChanges = recentChanges.filter((c) => c.timestamp > lastProcessedTs);
+      if (pendingChanges.length === 0) return;
+
+      // If pending changes exceed recent changes buffer or too old, perform a full sync
+      const oldestBufferedTs = recentChanges[0]?.timestamp || 0;
+      if (lastProcessedTs > 0 && lastProcessedTs < oldestBufferedTs) {
+        console.log('[Eco-Sync]: Device was offline for a long period. Performing full incremental sync...');
+        await this.pullAllCloudDataToLocal();
+        return;
+      }
+
+      let dataModified = false;
+      let highestTs = lastProcessedTs;
+
+      for (const change of pendingChanges) {
+        highestTs = Math.max(highestTs, change.timestamp);
+
+        if (change.col === 'assets') {
+          dataModified = (await this.applyAssetDelta(change)) || dataModified;
+        } else if (change.col === 'tickets') {
+          dataModified = (await this.applyTicketDelta(change)) || dataModified;
+        } else if (change.col === 'periodic_records') {
+          dataModified = (await this.applyPeriodicDelta(change)) || dataModified;
+        } else if (change.col === 'audit_sessions') {
+          dataModified = (await this.applyAuditDelta(change)) || dataModified;
+        } else if (change.col === 'users') {
+          dataModified = (await this.applyUserDelta(change)) || dataModified;
+        } else if (change.col === 'settings' && change.id === 'categories') {
+          dataModified = (await this.applyCategoriesDelta()) || dataModified;
+        }
+      }
+
+      // Update last processed timestamp
+      localStorage.setItem(LOCAL_SYNC_STORAGE.LAST_PROCESSED_TS, String(highestTs || Date.now()));
+
+      // Calculate saved reads (we fetched N documents instead of all hundreds of documents)
+      const currentAssetsStr = localStorage.getItem('asset_mgmt_assets');
+      const totalLocalAssets = currentAssetsStr ? JSON.parse(currentAssetsStr).length : 50;
+      const estimatedSaved = Math.max(0, totalLocalAssets - pendingChanges.length);
+      this.recordSavedReads(estimatedSaved);
+
+      if (dataModified && this.onDataChangedCallback) {
+        this.onDataChangedCallback();
+      }
+    } catch (err) {
+      this.handleSyncError('delta processing', err);
+    }
+  }
+
+  // Delta handlers for specific entities
+  private static async applyAssetDelta(change: RecentChange): Promise<boolean> {
+    try {
+      const assetsStr = localStorage.getItem('asset_mgmt_assets');
+      const assets: Asset[] = assetsStr ? JSON.parse(assetsStr) : [];
+
+      if (change.action === 'delete') {
+        const filtered = assets.filter((a) => a.id !== change.id && a.customId !== change.id);
+        localStorage.setItem('asset_mgmt_assets', JSON.stringify(filtered));
+        return true;
+      } else {
+        const snap = await getDoc(doc(db, 'assets', change.id));
+        if (snap.exists()) {
+          const remoteAsset = snap.data() as Asset;
+          const idx = assets.findIndex((a) => a.id === change.id || a.customId === remoteAsset.customId);
+          if (idx !== -1) {
+            assets[idx] = remoteAsset;
+          } else {
+            assets.unshift(remoteAsset);
+          }
+          localStorage.setItem('asset_mgmt_assets', JSON.stringify(assets));
+          return true;
+        }
+      }
+    } catch (err) {
+      this.handleSyncError('applyAssetDelta', err);
+    }
+    return false;
+  }
+
+  private static async applyTicketDelta(change: RecentChange): Promise<boolean> {
+    try {
+      const ticketsStr = localStorage.getItem('asset_mgmt_tickets');
+      const tickets: MaintenanceTicket[] = ticketsStr ? JSON.parse(ticketsStr) : [];
+
+      if (change.action === 'delete') {
+        const filtered = tickets.filter((t) => t.id !== change.id && t.ticketNumber !== change.id);
+        localStorage.setItem('asset_mgmt_tickets', JSON.stringify(filtered));
+        return true;
+      } else {
+        const snap = await getDoc(doc(db, 'tickets', change.id));
+        if (snap.exists()) {
+          const remoteTicket = snap.data() as MaintenanceTicket;
+          const idx = tickets.findIndex((t) => t.id === change.id || t.ticketNumber === remoteTicket.ticketNumber);
+          if (idx !== -1) {
+            tickets[idx] = remoteTicket;
+          } else {
+            tickets.unshift(remoteTicket);
+          }
+          localStorage.setItem('asset_mgmt_tickets', JSON.stringify(tickets));
+          return true;
+        }
+      }
+    } catch (err) {
+      this.handleSyncError('applyTicketDelta', err);
+    }
+    return false;
+  }
+
+  private static async applyPeriodicDelta(change: RecentChange): Promise<boolean> {
+    try {
+      const recsStr = localStorage.getItem('asset_mgmt_periodic');
+      const recs: PeriodicMaintenanceRecord[] = recsStr ? JSON.parse(recsStr) : [];
+
+      if (change.action === 'delete') {
+        const filtered = recs.filter((r) => r.id !== change.id);
+        localStorage.setItem('asset_mgmt_periodic', JSON.stringify(filtered));
+        return true;
+      } else {
+        const snap = await getDoc(doc(db, 'periodic_records', change.id));
+        if (snap.exists()) {
+          const remoteRecord = snap.data() as PeriodicMaintenanceRecord;
+          const idx = recs.findIndex((r) => r.id === change.id);
+          if (idx !== -1) {
+            recs[idx] = remoteRecord;
+          } else {
+            recs.unshift(remoteRecord);
+          }
+          localStorage.setItem('asset_mgmt_periodic', JSON.stringify(recs));
+          return true;
+        }
+      }
+    } catch (err) {
+      this.handleSyncError('applyPeriodicDelta', err);
+    }
+    return false;
+  }
+
+  private static async applyAuditDelta(change: RecentChange): Promise<boolean> {
+    try {
+      const auditsStr = localStorage.getItem('asset_mgmt_audit_sessions');
+      const audits: AuditSession[] = auditsStr ? JSON.parse(auditsStr) : [];
+
+      if (change.action === 'delete') {
+        const filtered = audits.filter((a) => a.id !== change.id && a.sessionNumber !== change.id);
+        localStorage.setItem('asset_mgmt_audit_sessions', JSON.stringify(filtered));
+        return true;
+      } else {
+        const snap = await getDoc(doc(db, 'audit_sessions', change.id));
+        if (snap.exists()) {
+          const remoteAudit = snap.data() as AuditSession;
+          const idx = audits.findIndex((a) => a.id === change.id || a.sessionNumber === remoteAudit.sessionNumber);
+          if (idx !== -1) {
+            audits[idx] = remoteAudit;
+          } else {
+            audits.unshift(remoteAudit);
+          }
+          localStorage.setItem('asset_mgmt_audit_sessions', JSON.stringify(audits));
+          return true;
+        }
+      }
+    } catch (err) {
+      this.handleSyncError('applyAuditDelta', err);
+    }
+    return false;
+  }
+
+  private static async applyUserDelta(change: RecentChange): Promise<boolean> {
+    try {
+      const usersStr = localStorage.getItem('asset_mgmt_users');
+      const users: User[] = usersStr ? JSON.parse(usersStr) : [];
+
+      if (change.action === 'delete') {
+        const filtered = users.filter((u) => u.id !== change.id);
+        localStorage.setItem('asset_mgmt_users', JSON.stringify(filtered));
+        return true;
+      } else {
+        const snap = await getDoc(doc(db, 'users', change.id));
+        if (snap.exists()) {
+          const remoteUser = snap.data() as User;
+          const idx = users.findIndex((u) => u.id === change.id || u.username === remoteUser.username);
+          if (idx !== -1) {
+            users[idx] = remoteUser;
+          } else {
+            users.push(remoteUser);
+          }
+          localStorage.setItem('asset_mgmt_users', JSON.stringify(users));
+          return true;
+        }
+      }
+    } catch (err) {
+      this.handleSyncError('applyUserDelta', err);
+    }
+    return false;
+  }
+
+  private static async applyCategoriesDelta(): Promise<boolean> {
+    try {
+      const snap = await getDoc(doc(db, 'settings', 'categories'));
+      if (snap.exists()) {
+        const data = snap.data();
+        if (data && Array.isArray(data.list)) {
+          localStorage.setItem('asset_mgmt_periodic_categories', JSON.stringify(data.list));
+          return true;
+        }
+      }
+    } catch (err) {
+      this.handleSyncError('applyCategoriesDelta', err);
+    }
+    return false;
+  }
+
+  /**
+   * Updates the global Sync Meta Pulse doc when a change occurs.
+   * Maintains a ring buffer of the last 60 changes.
+   */
+  private static async emitSyncChange(change: RecentChange): Promise<void> {
+    try {
+      const metaRef = doc(db, 'settings', 'sync_meta');
+      const now = Date.now();
+      change.timestamp = now;
+
+      const metaSnap = await getDoc(metaRef);
+      let currentChanges: RecentChange[] = [];
+      let currentVersion = 1;
+
+      if (metaSnap.exists()) {
+        const data = metaSnap.data() as SyncMetaDoc;
+        currentChanges = Array.isArray(data.recentChanges) ? data.recentChanges : [];
+        currentVersion = (data.version || 1) + 1;
+      }
+
+      // Filter out duplicate pending for same doc ID to avoid spamming
+      const filtered = currentChanges.filter((c) => !(c.col === change.col && c.id === change.id));
+      filtered.push(change);
+
+      // Keep maximum last 60 recent changes to ensure tiny payload
+      const trimmed = filtered.slice(-60);
+
+      await setDoc(metaRef, {
+        version: currentVersion,
+        lastUpdated: new Date().toISOString(),
+        recentChanges: trimmed,
+      }, { merge: true });
+
+      // Update local timestamp so this client doesn't re-fetch its own write
+      localStorage.setItem(LOCAL_SYNC_STORAGE.LAST_PROCESSED_TS, String(now));
+    } catch (err) {
+      this.handleSyncError('emitSyncChange', err);
+    }
+  }
+
+  /**
+   * Check if a brand new device opened the app and needs initial cloud pull
+   */
+  private static async checkAndPerformInitialLoad(): Promise<void> {
+    if (this.isInitialized) return;
+    this.isInitialized = true;
+
+    try {
+      const localAssetsStr = localStorage.getItem('asset_mgmt_assets');
+      const localAssets: Asset[] = localAssetsStr ? JSON.parse(localAssetsStr) : [];
+      const hasInitToken = localStorage.getItem(LOCAL_SYNC_STORAGE.INITIALIZED_FLAG);
+
+      // If local assets are empty and never initialized on this device, pull all cloud data
+      if ((localAssets.length === 0 || !hasInitToken)) {
+        await this.pullAllCloudDataToLocal();
+        localStorage.setItem(LOCAL_SYNC_STORAGE.INITIALIZED_FLAG, 'true');
+      } else {
+        // Just record timestamp
+        const lastTs = localStorage.getItem(LOCAL_SYNC_STORAGE.LAST_PROCESSED_TS);
+        if (!lastTs) {
+          localStorage.setItem(LOCAL_SYNC_STORAGE.LAST_PROCESSED_TS, String(Date.now()));
+        }
+      }
+    } catch (err) {
+      this.handleSyncError('initial check', err);
+    }
+  }
+
+  /**
+   * Pull all collections to local storage (Only used on new device setup or manual Full Sync)
+   */
+  static async pullAllCloudDataToLocal(): Promise<{ success: boolean; message: string }> {
+    try {
+      console.log('[Eco-Sync]: Downloading full database snapshot...');
+
+      // 1. Assets
+      const assetsSnap = await getDocs(collection(db, 'assets'));
+      if (!assetsSnap.empty) {
+        const remoteAssets: Asset[] = [];
+        assetsSnap.forEach((d) => remoteAssets.push(d.data() as Asset));
+        localStorage.setItem('asset_mgmt_assets', JSON.stringify(remoteAssets));
+      }
+
+      // 2. Tickets
+      const ticketsSnap = await getDocs(collection(db, 'tickets'));
+      if (!ticketsSnap.empty) {
+        const remoteTickets: MaintenanceTicket[] = [];
+        ticketsSnap.forEach((d) => remoteTickets.push(d.data() as MaintenanceTicket));
+        localStorage.setItem('asset_mgmt_tickets', JSON.stringify(remoteTickets));
+      }
+
+      // 3. Periodic
+      const periodicSnap = await getDocs(collection(db, 'periodic_records'));
+      if (!periodicSnap.empty) {
+        const remotePeriodic: PeriodicMaintenanceRecord[] = [];
+        periodicSnap.forEach((d) => remotePeriodic.push(d.data() as PeriodicMaintenanceRecord));
+        localStorage.setItem('asset_mgmt_periodic', JSON.stringify(remotePeriodic));
+      }
+
+      // 4. Audits
+      const auditsSnap = await getDocs(collection(db, 'audit_sessions'));
+      if (!auditsSnap.empty) {
+        const remoteAudits: AuditSession[] = [];
+        auditsSnap.forEach((d) => remoteAudits.push(d.data() as AuditSession));
+        localStorage.setItem('asset_mgmt_audit_sessions', JSON.stringify(remoteAudits));
+      }
+
+      // 5. Users
+      const usersSnap = await getDocs(collection(db, 'users'));
+      if (!usersSnap.empty) {
+        const remoteUsers: User[] = [];
+        usersSnap.forEach((d) => remoteUsers.push(d.data() as User));
+        localStorage.setItem('asset_mgmt_users', JSON.stringify(remoteUsers));
+      }
+
+      // 6. Categories
+      const catSnap = await getDoc(doc(db, 'settings', 'categories'));
+      if (catSnap.exists()) {
+        const catData = catSnap.data();
+        if (catData?.list) {
+          localStorage.setItem('asset_mgmt_periodic_categories', JSON.stringify(catData.list));
+        }
+      }
+
+      localStorage.setItem(LOCAL_SYNC_STORAGE.LAST_PROCESSED_TS, String(Date.now()));
+      localStorage.setItem(LOCAL_SYNC_STORAGE.INITIALIZED_FLAG, 'true');
+
+      if (this.onDataChangedCallback) {
+        this.onDataChangedCallback();
+      }
+
+      return {
+        success: true,
+        message: 'تم تحميل وتحديث قاعدة البيانات السحابية بالكامل بنجاح',
+      };
+    } catch (err: any) {
+      this.handleSyncError('pullAllCloudData', err);
+      return { success: false, message: `فشل التحميل السحابي: ${err?.message}` };
     }
   }
 
   /**
    * If Firestore is completely empty and local storage has assets/data, push to Firestore
-   * If Firestore has data, pull to local storage
    */
   static async bootstrapCloudData(): Promise<void> {
-    if (this.isInitialized) return;
-    this.isInitialized = true;
-
     try {
-      const assetsSnap = await getDocs(collection(db, 'assets'));
-      const localAssetsStr = localStorage.getItem('asset_mgmt_assets');
-      const localAssets: Asset[] = localAssetsStr ? JSON.parse(localAssetsStr) : [];
-
-      if (assetsSnap.empty && localAssets.length > 0) {
-        console.log('Uploading local database to Firestore for initial cloud sync...');
-        await this.pushAllLocalDataToFirestore();
+      const metaSnap = await getDoc(doc(db, 'settings', 'sync_meta'));
+      if (!metaSnap.exists()) {
+        const localAssetsStr = localStorage.getItem('asset_mgmt_assets');
+        const localAssets: Asset[] = localAssetsStr ? JSON.parse(localAssetsStr) : [];
+        if (localAssets.length > 0) {
+          await this.pushAllLocalDataToFirestore();
+        } else {
+          // Initialize empty meta doc
+          await setDoc(doc(db, 'settings', 'sync_meta'), {
+            version: 1,
+            lastUpdated: new Date().toISOString(),
+            recentChanges: [],
+          });
+        }
       }
     } catch (err) {
-      console.error('Bootstrap Firestore error:', err);
+      this.handleSyncError('bootstrap', err);
     }
   }
 
   /**
-   * Push an individual asset to Firestore
+   * Push an individual asset to Firestore + Emit Sync Pulse
    */
   static async syncAsset(asset: Asset): Promise<void> {
     try {
       const docRef = doc(db, 'assets', asset.id);
       await setDoc(docRef, cleanForFirestore(asset), { merge: true });
+      await this.emitSyncChange({
+        col: 'assets',
+        id: asset.id,
+        action: 'set',
+        timestamp: Date.now(),
+      });
     } catch (err) {
-      console.error('Error syncing asset to Firestore:', err);
+      this.handleSyncError('syncAsset', err);
     }
   }
 
   /**
-   * Delete an asset from Firestore
+   * Delete an asset from Firestore + Emit Sync Pulse
    */
   static async deleteAsset(assetId: string): Promise<void> {
     try {
       await deleteDoc(doc(db, 'assets', assetId));
+      await this.emitSyncChange({
+        col: 'assets',
+        id: assetId,
+        action: 'delete',
+        timestamp: Date.now(),
+      });
     } catch (err) {
-      console.error('Error deleting asset from Firestore:', err);
+      this.handleSyncError('deleteAsset', err);
     }
   }
 
   /**
-   * Push an individual ticket to Firestore
+   * Push an individual ticket to Firestore + Emit Sync Pulse
    */
   static async syncTicket(ticket: MaintenanceTicket): Promise<void> {
     try {
       const docRef = doc(db, 'tickets', ticket.id);
       await setDoc(docRef, cleanForFirestore(ticket), { merge: true });
+      await this.emitSyncChange({
+        col: 'tickets',
+        id: ticket.id,
+        action: 'set',
+        timestamp: Date.now(),
+      });
     } catch (err) {
-      console.error('Error syncing ticket to Firestore:', err);
+      this.handleSyncError('syncTicket', err);
     }
   }
 
   /**
-   * Delete a ticket from Firestore
+   * Delete a ticket from Firestore + Emit Sync Pulse
    */
   static async deleteTicket(ticketId: string): Promise<void> {
     try {
       await deleteDoc(doc(db, 'tickets', ticketId));
+      await this.emitSyncChange({
+        col: 'tickets',
+        id: ticketId,
+        action: 'delete',
+        timestamp: Date.now(),
+      });
     } catch (err) {
-      console.error('Error deleting ticket from Firestore:', err);
+      this.handleSyncError('deleteTicket', err);
     }
   }
 
   /**
-   * Push an individual periodic record to Firestore
+   * Push an individual periodic record to Firestore + Emit Sync Pulse
    */
   static async syncPeriodicRecord(record: PeriodicMaintenanceRecord): Promise<void> {
     try {
       const docRef = doc(db, 'periodic_records', record.id);
       await setDoc(docRef, cleanForFirestore(record), { merge: true });
+      await this.emitSyncChange({
+        col: 'periodic_records',
+        id: record.id,
+        action: 'set',
+        timestamp: Date.now(),
+      });
     } catch (err) {
-      console.error('Error syncing periodic record to Firestore:', err);
+      this.handleSyncError('syncPeriodicRecord', err);
     }
   }
 
   /**
-   * Delete a periodic record from Firestore
+   * Delete a periodic record from Firestore + Emit Sync Pulse
    */
   static async deletePeriodicRecord(recordId: string): Promise<void> {
     try {
       await deleteDoc(doc(db, 'periodic_records', recordId));
+      await this.emitSyncChange({
+        col: 'periodic_records',
+        id: recordId,
+        action: 'delete',
+        timestamp: Date.now(),
+      });
     } catch (err) {
-      console.error('Error deleting periodic record from Firestore:', err);
+      this.handleSyncError('deletePeriodicRecord', err);
     }
   }
 
   /**
-   * Push an audit session to Firestore
+   * Push an audit session to Firestore + Emit Sync Pulse
    */
   static async syncAuditSession(session: AuditSession): Promise<void> {
     try {
       const docRef = doc(db, 'audit_sessions', session.id);
       await setDoc(docRef, cleanForFirestore(session), { merge: true });
+      await this.emitSyncChange({
+        col: 'audit_sessions',
+        id: session.id,
+        action: 'set',
+        timestamp: Date.now(),
+      });
     } catch (err) {
-      console.error('Error syncing audit session to Firestore:', err);
+      this.handleSyncError('syncAuditSession', err);
     }
   }
 
   /**
-   * Delete an audit session from Firestore
+   * Delete an audit session from Firestore + Emit Sync Pulse
    */
   static async deleteAuditSession(sessionId: string): Promise<void> {
     try {
       await deleteDoc(doc(db, 'audit_sessions', sessionId));
+      await this.emitSyncChange({
+        col: 'audit_sessions',
+        id: sessionId,
+        action: 'delete',
+        timestamp: Date.now(),
+      });
     } catch (err) {
-      console.error('Error deleting audit session from Firestore:', err);
+      this.handleSyncError('deleteAuditSession', err);
     }
   }
 
   /**
-   * Push user to Firestore
+   * Push user to Firestore + Emit Sync Pulse
    */
   static async syncUser(user: User): Promise<void> {
     try {
       const docRef = doc(db, 'users', user.id);
       await setDoc(docRef, cleanForFirestore(user), { merge: true });
+      await this.emitSyncChange({
+        col: 'users',
+        id: user.id,
+        action: 'set',
+        timestamp: Date.now(),
+      });
     } catch (err) {
-      console.error('Error syncing user to Firestore:', err);
+      this.handleSyncError('syncUser', err);
     }
   }
 
   /**
-   * Delete user from Firestore
+   * Delete user from Firestore + Emit Sync Pulse
    */
   static async deleteUser(userId: string): Promise<void> {
     try {
       await deleteDoc(doc(db, 'users', userId));
+      await this.emitSyncChange({
+        col: 'users',
+        id: userId,
+        action: 'delete',
+        timestamp: Date.now(),
+      });
     } catch (err) {
-      console.error('Error deleting user from Firestore:', err);
+      this.handleSyncError('deleteUser', err);
     }
   }
 
   /**
-   * Sync categories list
+   * Sync categories list + Emit Sync Pulse
    */
   static async syncCategories(categories: string[]): Promise<void> {
     try {
       const docRef = doc(db, 'settings', 'categories');
       await setDoc(docRef, { list: categories, updatedAt: new Date().toISOString() });
+      await this.emitSyncChange({
+        col: 'settings',
+        id: 'categories',
+        action: 'set',
+        timestamp: Date.now(),
+      });
     } catch (err) {
-      console.error('Error syncing categories to Firestore:', err);
+      this.handleSyncError('syncCategories', err);
     }
   }
 
@@ -348,6 +795,18 @@ export class FirestoreSyncService {
         });
       }
 
+      // Initialize/Reset Meta Doc
+      await setDoc(doc(db, 'settings', 'sync_meta'), {
+        version: 1,
+        lastUpdated: new Date().toISOString(),
+        recentChanges: [],
+        assetsCount: assets.length,
+        ticketsCount: tickets.length,
+      });
+
+      localStorage.setItem(LOCAL_SYNC_STORAGE.LAST_PROCESSED_TS, String(Date.now()));
+      localStorage.setItem(LOCAL_SYNC_STORAGE.INITIALIZED_FLAG, 'true');
+
       this.isSyncing = false;
       return {
         success: true,
@@ -355,7 +814,7 @@ export class FirestoreSyncService {
       };
     } catch (err: any) {
       this.isSyncing = false;
-      console.error('Push all data to Firestore failed:', err);
+      this.handleSyncError('pushAllLocalDataToFirestore', err);
       return { success: false, message: `فشل رفع البيانات: ${err?.message || 'خطأ غير معروف'}` };
     }
   }
@@ -365,15 +824,20 @@ export class FirestoreSyncService {
    */
   static async clearAllCloudData(): Promise<void> {
     try {
-      const collections = ['assets', 'tickets', 'periodic_records', 'audit_sessions'];
+      const collections = ['assets', 'tickets', 'periodic_records', 'audit_sessions', 'users'];
       for (const col of collections) {
         const snap = await getDocs(collection(db, col));
         const batch = writeBatch(db);
         snap.forEach((d) => batch.delete(d.ref));
         await batch.commit();
       }
+      await setDoc(doc(db, 'settings', 'sync_meta'), {
+        version: 1,
+        lastUpdated: new Date().toISOString(),
+        recentChanges: [],
+      });
     } catch (err) {
-      console.error('Error clearing cloud data:', err);
+      this.handleSyncError('clearAllCloudData', err);
     }
   }
 }
