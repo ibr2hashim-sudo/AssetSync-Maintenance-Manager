@@ -16,6 +16,7 @@ import {
   Package,
   Users as UsersIcon,
   ClipboardCheck,
+  Zap,
 } from 'lucide-react';
 import { User } from '../types';
 
@@ -204,31 +205,20 @@ export const Navbar: React.FC<NavbarProps> = ({
                 )}
               </div>
 
-              {/* On-Demand Sync Button */}
+              {/* On-Demand Eco-Sync Button for ALL users */}
               <button
-                onClick={onManualSync}
-                disabled={isSyncing}
-                title="مزامنة يدوية وتحديث البيانات عند الطلب"
-                className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 transition-colors relative focus:outline-none"
+                onClick={onOpenSyncSettings}
+                title="النظام الاقتصادي والمزامنة السحابية"
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 hover:text-blue-200 border border-blue-500/30 transition-all text-xs font-bold shadow-xs"
               >
-                <RefreshCw
-                  className={`w-4 h-4 ${isSyncing ? 'animate-spin text-blue-400' : ''}`}
-                />
+                <Zap className="w-3.5 h-3.5 text-amber-300 animate-pulse" />
+                <span className="hidden sm:inline">المزامنة السحابية</span>
               </button>
             </div>
 
-            {/* Admin Extra Tools: Sync Setup, History, Factory Reset */}
+            {/* Admin Extra Tools: History & Factory Reset */}
             {currentUser?.role === 'admin' && (
               <div className="hidden sm:flex items-center gap-1.5 border-r border-slate-700/80 pr-2 mr-1">
-                {/* Cloud & Drive Sync Settings */}
-                <button
-                  onClick={onOpenSyncSettings}
-                  title="إعدادات مزامنة Google Sheets / Drive"
-                  className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition-colors"
-                >
-                  <Sliders className="w-4 h-4" />
-                </button>
-
                 {/* History Log Button */}
                 <button
                   onClick={onOpenHistory}

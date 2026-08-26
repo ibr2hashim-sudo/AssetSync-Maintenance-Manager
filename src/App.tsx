@@ -358,6 +358,7 @@ export default function App() {
       {/* Sync Settings Modal */}
       {showSyncModal && (
         <SyncSettingsModal
+          currentUser={currentUser}
           onClose={() => setShowSyncModal(false)}
           onRefresh={reloadData}
         />
