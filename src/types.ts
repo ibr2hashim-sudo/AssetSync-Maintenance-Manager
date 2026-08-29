@@ -106,6 +106,48 @@ export interface HistoryLog {
   category: 'أصول' | 'صيانة' | 'صيانة دورية' | 'مستخدمين' | 'مزامنة' | 'نظام' | 'جرد';
 }
 
+export type SurgicalSetStatus =
+  | 'جاهز للاستخدام'
+  | 'قيد التعقيم'
+  | 'في العمليات'
+  | 'ناقص / يحتاج استكمال'
+  | 'صيانة / سن';
+
+export type InstrumentStatus = 'سليم' | 'تالف' | 'مفقود' | 'يحتاج سن' | 'مستبعد';
+
+export interface SurgicalInstrument {
+  id: string;
+  setId: string;
+  setCode?: string;
+  setName?: string;
+  code: string;                 // e.g. OB-1, OB-2, OB-28
+  name: string;                 // e.g. Hohmann Retractor, Plate Bender
+  size?: string;                // e.g. Curved, Straight, Toothed, 20cm
+  quantity: number;             // Standard expected count
+  actualQuantity?: number;      // Counted quantity
+  status: InstrumentStatus;     // 'سليم' | 'تالف' | 'مفقود' | 'يحتاج سن' | 'مستبعد'
+  notes?: string;
+  imageUrl?: string;
+  updatedAt?: string;
+}
+
+export interface SurgicalSet {
+  id: string;
+  name: string;                 // e.g. Ortho Big Set
+  code: string;                 // e.g. SET-OB-01
+  department: string;           // e.g. العمليات / العظام / قسم التعقيم المركزي (CSSD)
+  subLocation?: string;         // e.g. رف A-2 / مستودع السيتات المعقمة
+  status: SurgicalSetStatus;
+  trayNumber?: string;          // e.g. حاوية تعقيم #01
+  notes?: string;
+  imageUrl?: string;            // Container / Tray image
+  instrumentsCount?: number;
+  lastSterilizedDate?: string;
+  lastAuditDate?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ImageImportReport {
   total: number;
   successful: number;

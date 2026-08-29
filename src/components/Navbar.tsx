@@ -17,6 +17,7 @@ import {
   Users as UsersIcon,
   ClipboardCheck,
   Zap,
+  Scissors,
 } from 'lucide-react';
 import { User } from '../types';
 
@@ -158,6 +159,19 @@ export const Navbar: React.FC<NavbarProps> = ({
                 الجرد والمطابقة
               </button>
             )}
+
+            {/* Surgical Sets & Trays */}
+            <button
+              onClick={() => setActiveTab('surgical')}
+              className={`px-3.5 py-1.5 rounded-lg text-sm font-medium transition-all flex items-center gap-1.5 ${
+                activeTab === 'surgical'
+                  ? 'bg-blue-600 text-white shadow-sm'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-700/50'
+              }`}
+            >
+              <Scissors className="w-4 h-4 text-indigo-300" />
+              الأدوات الجراحية
+            </button>
 
             {/* User Management: Admin only */}
             {currentUser?.role === 'admin' && (
@@ -380,6 +394,14 @@ export const Navbar: React.FC<NavbarProps> = ({
               الجرد والمطابقة
             </button>
           )}
+          <button
+            onClick={() => setActiveTab('surgical')}
+            className={`px-3 py-1.5 rounded-lg font-medium whitespace-nowrap ${
+              activeTab === 'surgical' ? 'bg-blue-600 text-white' : 'text-slate-400'
+            }`}
+          >
+            الأدوات الجراحية
+          </button>
           {currentUser?.role === 'admin' && (
             <button
               onClick={() => setActiveTab('users')}

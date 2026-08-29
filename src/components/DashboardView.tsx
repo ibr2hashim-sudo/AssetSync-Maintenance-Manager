@@ -14,6 +14,7 @@ import {
   TrendingUp,
   Activity,
   ClipboardCheck,
+  Scissors,
 } from 'lucide-react';
 import { Asset, MaintenanceTicket, User, HistoryLog, PeriodicMaintenanceRecord } from '../types';
 
@@ -412,6 +413,34 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               </div>
             </div>
           )}
+
+          {/* Card: السيتات والأدوات الجراحية */}
+          <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-sm hover:shadow-lg transition-all flex flex-col justify-between group">
+            <div>
+              <div className="w-12 h-12 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center mb-4 group-hover:bg-purple-600 group-hover:text-white transition-colors">
+                <Scissors className="w-6 h-6" />
+              </div>
+              <h4 className="text-base font-bold text-slate-900 group-hover:text-purple-600 transition-colors">
+                السيتات والأدوات الجراحية
+              </h4>
+              <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">
+                إدارة أطقم العمليات والتعقيم (CSSD)، توثيق محتويات السيتات، استيراد وتصدير الإكسل ومطابقة صور الأدوات تلقائياً.
+              </p>
+            </div>
+
+            <div className="mt-5 pt-4 border-t border-slate-100 flex items-center justify-between">
+              <span className="text-xs font-semibold text-slate-400">
+                أطقم الجراحة
+              </span>
+              <button
+                onClick={() => onNavigate('surgical')}
+                className="flex items-center gap-1 text-xs font-bold text-purple-600 hover:text-purple-700 transition-colors"
+              >
+                فتح السيتات
+                <ArrowLeft className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
 
           {/* Card 5: إدارة المستخدمين (Admin only) */}
           {currentUser?.role === 'admin' && (
