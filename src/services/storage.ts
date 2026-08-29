@@ -1707,8 +1707,23 @@ export class StorageService {
 
   // History Logs
   static getHistory(): HistoryLog[] {
-    const history = getItem<HistoryLog[]>(STORAGE_KEYS.HISTORY, []);
-    return Array.isArray(history) ? history : [];
+    const history = getItem<any[]>(STORAGE_KEYS.HISTORY, []);
+    if (!Array.isArray(history)) return [];
+    return history.map((item) => {
+      let ts = item.timestamp;
+      if (!ts) {
+        ts = new Date().toISOString();
+      }
+      return {
+        id: item.id || `hist-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+        timestamp: ts,
+        action: item.action || 'عملية غير محددة',
+        details: item.details || '',
+        performedBy: item.performedBy || item.userName || 'النظام',
+        userRole: item.userRole || 'admin',
+        category: item.category || 'نظام',
+      };
+    });
   }
 
   static getHistoryLogs(): HistoryLog[] {
@@ -1724,16 +1739,23 @@ export class StorageService {
   ): void {
     const history = this.getHistory();
     const now = new Date();
-    const formatted = `${now.toISOString().split('T')[0]} ${now.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
+    const dateStr = now.toISOString().split('T')[0];
+    const timeStr = now.toLocaleTimeString('ar-EG', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true,
+    });
+    const formatted = `${dateStr} ${timeStr}`;
 
     const entry: HistoryLog = {
       id: `hist-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
       timestamp: formatted,
       action,
       details,
-      performedBy,
-      userRole,
-      category,
+      performedBy: performedBy || 'النظام',
+      userRole: userRole || 'admin',
+      category: category || 'نظام',
     };
 
     history.unshift(entry);

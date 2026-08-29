@@ -148,9 +148,24 @@ export class ExcelUtils {
     // Sheet 5: Activity Logs (History)
     // Timestamp | User | Action | Details
     // -----------------------------------------------------------------------
+    const formatTs = (ts?: string) => {
+      if (!ts) return '';
+      if (ts.includes('ص') || ts.includes('م') || /^\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}/.test(ts)) {
+        return ts;
+      }
+      try {
+        const d = new Date(ts);
+        if (!isNaN(d.getTime())) {
+          return d.toLocaleString('ar-EG');
+        }
+      } catch {}
+      return ts;
+    };
+
     const historyRows = data.history.map((h) => ({
-      Timestamp: h.timestamp ? new Date(h.timestamp).toLocaleString('ar-EG') : '',
-      User: `${h.performedBy} (${h.userRole})`,
+      Timestamp: formatTs(h.timestamp),
+      User: `${h.performedBy || 'النظام'} (${h.userRole || 'admin'})`,
+      Category: h.category || 'نظام',
       Action: h.action,
       Details: h.details,
     }));
