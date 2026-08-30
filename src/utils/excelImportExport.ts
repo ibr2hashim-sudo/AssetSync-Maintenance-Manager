@@ -6,6 +6,8 @@ import {
   MaintenanceTicket,
   PeriodicMaintenanceRecord,
   HistoryLog,
+  SurgicalSet,
+  SurgicalInstrument,
 } from '../types';
 
 export interface ImportResult {
@@ -17,6 +19,8 @@ export interface ImportResult {
   importedTickets?: MaintenanceTicket[];
   importedPeriodic?: PeriodicMaintenanceRecord[];
   importedHistory?: HistoryLog[];
+  importedSurgicalSets?: SurgicalSet[];
+  importedSurgicalInstruments?: SurgicalInstrument[];
   isComprehensive?: boolean;
   sheetsFound?: string[];
 }
@@ -27,6 +31,8 @@ export interface ComprehensiveDatabaseData {
   tickets: MaintenanceTicket[];
   periodicRecords: PeriodicMaintenanceRecord[];
   history: HistoryLog[];
+  surgicalSets?: SurgicalSet[];
+  surgicalInstruments?: SurgicalInstrument[];
 }
 
 export class ExcelUtils {
@@ -173,7 +179,44 @@ export class ExcelUtils {
     XLSX.utils.book_append_sheet(wb, wsHistory, 'Activity Logs (History)');
 
     // -----------------------------------------------------------------------
-    // Sheet 6: Stats (Read-Only)
+    // Sheet 6: Surgical Sets (السيتات الجراحية)
+    // -----------------------------------------------------------------------
+    if (data.surgicalSets && data.surgicalSets.length > 0) {
+      const setsRows = data.surgicalSets.map((s) => ({
+        'Set Name': s.name,
+        'Set Code': s.code,
+        'Department': s.department,
+        'Sub Location': s.subLocation || '',
+        'Status': s.status,
+        'Tray Number': s.trayNumber || '',
+        'Instruments Count': s.instrumentsCount ?? 0,
+        'Notes': s.notes || '',
+      }));
+      const wsSets = XLSX.utils.json_to_sheet(setsRows);
+      XLSX.utils.book_append_sheet(wb, wsSets, 'Surgical Sets');
+    }
+
+    // -----------------------------------------------------------------------
+    // Sheet 7: Surgical Instruments (الأدوات الجراحية)
+    // -----------------------------------------------------------------------
+    if (data.surgicalInstruments && data.surgicalInstruments.length > 0) {
+      const instRows = data.surgicalInstruments.map((inst) => ({
+        'Set Name': inst.setName || '',
+        'Set Code': inst.setCode || '',
+        'Code': inst.code,
+        'Instrument Name': inst.name,
+        'Size / Type': inst.size || '',
+        'Standard Quantity': inst.quantity,
+        'Actual Quantity': inst.actualQuantity ?? inst.quantity,
+        'Status': inst.status,
+        'Notes': inst.notes || '',
+      }));
+      const wsInsts = XLSX.utils.json_to_sheet(instRows);
+      XLSX.utils.book_append_sheet(wb, wsInsts, 'Surgical Instruments');
+    }
+
+    // -----------------------------------------------------------------------
+    // Sheet 8: Stats (Read-Only)
     // -----------------------------------------------------------------------
     const totalAssets = data.assets.length;
     const workingAssets = data.assets.filter((a) => a.status === 'شغال').length;

@@ -10,14 +10,31 @@ import {
   serverTimestamp,
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { Asset, MaintenanceTicket, PeriodicMaintenanceRecord, User, AuditSession } from '../types';
+import {
+  Asset,
+  MaintenanceTicket,
+  PeriodicMaintenanceRecord,
+  User,
+  AuditSession,
+  SurgicalSet,
+  SurgicalInstrument,
+} from '../types';
+import { saveImageToDB } from './storage';
 
 function cleanForFirestore<T>(obj: T): T {
   return JSON.parse(JSON.stringify(obj, (_, v) => (v === undefined ? null : v)));
 }
 
 interface RecentChange {
-  col: 'assets' | 'tickets' | 'periodic_records' | 'audit_sessions' | 'users' | 'settings';
+  col:
+    | 'assets'
+    | 'tickets'
+    | 'periodic_records'
+    | 'audit_sessions'
+    | 'users'
+    | 'settings'
+    | 'surgical_sets'
+    | 'surgical_instruments';
   id: string;
   action: 'set' | 'delete';
   timestamp: number;
@@ -170,6 +187,10 @@ export class FirestoreSyncService {
           dataModified = (await this.applyUserDelta(change)) || dataModified;
         } else if (change.col === 'settings' && change.id === 'categories') {
           dataModified = (await this.applyCategoriesDelta()) || dataModified;
+        } else if (change.col === 'surgical_sets') {
+          dataModified = (await this.applySurgicalSetDelta(change)) || dataModified;
+        } else if (change.col === 'surgical_instruments') {
+          dataModified = (await this.applySurgicalInstrumentDelta(change)) || dataModified;
         }
       }
 
@@ -352,6 +373,73 @@ export class FirestoreSyncService {
     return false;
   }
 
+  private static async applySurgicalSetDelta(change: RecentChange): Promise<boolean> {
+    try {
+      const setsStr = localStorage.getItem('asset_mgmt_surgical_sets');
+      const sets: SurgicalSet[] = setsStr ? JSON.parse(setsStr) : [];
+
+      if (change.action === 'delete') {
+        const filtered = sets.filter((s) => s.id !== change.id && s.code !== change.id);
+        localStorage.setItem('asset_mgmt_surgical_sets', JSON.stringify(filtered));
+        return true;
+      } else {
+        const snap = await getDoc(doc(db, 'surgical_sets', change.id));
+        if (snap.exists()) {
+          const remoteSet = snap.data() as SurgicalSet;
+          const idx = sets.findIndex((s) => s.id === change.id || s.code === remoteSet.code);
+          if (idx !== -1) {
+            sets[idx] = remoteSet;
+          } else {
+            sets.unshift(remoteSet);
+          }
+          localStorage.setItem('asset_mgmt_surgical_sets', JSON.stringify(sets));
+          return true;
+        }
+      }
+    } catch (err) {
+      this.handleSyncError('applySurgicalSetDelta', err);
+    }
+    return false;
+  }
+
+  private static async applySurgicalInstrumentDelta(change: RecentChange): Promise<boolean> {
+    try {
+      const instStr = localStorage.getItem('asset_mgmt_surgical_instruments');
+      const instruments: SurgicalInstrument[] = instStr ? JSON.parse(instStr) : [];
+
+      if (change.action === 'delete') {
+        const filtered = instruments.filter((i) => i.id !== change.id);
+        localStorage.setItem('asset_mgmt_surgical_instruments', JSON.stringify(filtered));
+        return true;
+      } else {
+        const snap = await getDoc(doc(db, 'surgical_instruments', change.id));
+        if (snap.exists()) {
+          const remoteInst = snap.data() as SurgicalInstrument;
+          const idx = instruments.findIndex((i) => i.id === change.id);
+          if (idx !== -1) {
+            instruments[idx] = remoteInst;
+          } else {
+            instruments.push(remoteInst);
+          }
+          localStorage.setItem('asset_mgmt_surgical_instruments', JSON.stringify(instruments));
+
+          // Also save image to IndexedDB for offline and fast render if present
+          if (remoteInst.imageUrl) {
+            try {
+              await saveImageToDB(`inst_${remoteInst.id}`, remoteInst.imageUrl);
+              await saveImageToDB(`code_${remoteInst.code}`, remoteInst.imageUrl);
+            } catch {}
+          }
+
+          return true;
+        }
+      }
+    } catch (err) {
+      this.handleSyncError('applySurgicalInstrumentDelta', err);
+    }
+    return false;
+  }
+
   /**
    * Updates the global Sync Meta Pulse doc when a change occurs.
    * Maintains a ring buffer of the last 60 changes.
@@ -474,6 +562,29 @@ export class FirestoreSyncService {
         if (catData?.list) {
           localStorage.setItem('asset_mgmt_periodic_categories', JSON.stringify(catData.list));
         }
+      }
+
+      // 7. Surgical Sets
+      const setsSnap = await getDocs(collection(db, 'surgical_sets'));
+      if (!setsSnap.empty) {
+        const remoteSets: SurgicalSet[] = [];
+        setsSnap.forEach((d) => remoteSets.push(d.data() as SurgicalSet));
+        localStorage.setItem('asset_mgmt_surgical_sets', JSON.stringify(remoteSets));
+      }
+
+      // 8. Surgical Instruments
+      const instSnap = await getDocs(collection(db, 'surgical_instruments'));
+      if (!instSnap.empty) {
+        const remoteInsts: SurgicalInstrument[] = [];
+        instSnap.forEach((d) => {
+          const inst = d.data() as SurgicalInstrument;
+          remoteInsts.push(inst);
+          if (inst.imageUrl) {
+            saveImageToDB(`inst_${inst.id}`, inst.imageUrl).catch(() => {});
+            saveImageToDB(`code_${inst.code}`, inst.imageUrl).catch(() => {});
+          }
+        });
+        localStorage.setItem('asset_mgmt_surgical_instruments', JSON.stringify(remoteInsts));
       }
 
       localStorage.setItem(LOCAL_SYNC_STORAGE.LAST_PROCESSED_TS, String(Date.now()));
@@ -712,6 +823,76 @@ export class FirestoreSyncService {
   }
 
   /**
+   * Push an individual surgical set to Firestore + Emit Sync Pulse
+   */
+  static async syncSurgicalSet(set: SurgicalSet): Promise<void> {
+    try {
+      const docRef = doc(db, 'surgical_sets', set.id);
+      await setDoc(docRef, cleanForFirestore(set), { merge: true });
+      await this.emitSyncChange({
+        col: 'surgical_sets',
+        id: set.id,
+        action: 'set',
+        timestamp: Date.now(),
+      });
+    } catch (err) {
+      this.handleSyncError('syncSurgicalSet', err);
+    }
+  }
+
+  /**
+   * Delete an individual surgical set from Firestore + Emit Sync Pulse
+   */
+  static async deleteSurgicalSet(setId: string): Promise<void> {
+    try {
+      await deleteDoc(doc(db, 'surgical_sets', setId));
+      await this.emitSyncChange({
+        col: 'surgical_sets',
+        id: setId,
+        action: 'delete',
+        timestamp: Date.now(),
+      });
+    } catch (err) {
+      this.handleSyncError('deleteSurgicalSet', err);
+    }
+  }
+
+  /**
+   * Push an individual surgical instrument to Firestore + Emit Sync Pulse
+   */
+  static async syncSurgicalInstrument(instrument: SurgicalInstrument): Promise<void> {
+    try {
+      const docRef = doc(db, 'surgical_instruments', instrument.id);
+      await setDoc(docRef, cleanForFirestore(instrument), { merge: true });
+      await this.emitSyncChange({
+        col: 'surgical_instruments',
+        id: instrument.id,
+        action: 'set',
+        timestamp: Date.now(),
+      });
+    } catch (err) {
+      this.handleSyncError('syncSurgicalInstrument', err);
+    }
+  }
+
+  /**
+   * Delete an individual surgical instrument from Firestore + Emit Sync Pulse
+   */
+  static async deleteSurgicalInstrument(instrumentId: string): Promise<void> {
+    try {
+      await deleteDoc(doc(db, 'surgical_instruments', instrumentId));
+      await this.emitSyncChange({
+        col: 'surgical_instruments',
+        id: instrumentId,
+        action: 'delete',
+        timestamp: Date.now(),
+      });
+    } catch (err) {
+      this.handleSyncError('deleteSurgicalInstrument', err);
+    }
+  }
+
+  /**
    * Push ALL local data into Firestore in chunks
    */
   static async pushAllLocalDataToFirestore(): Promise<{ success: boolean; message: string }> {
@@ -725,6 +906,8 @@ export class FirestoreSyncService {
       const auditsStr = localStorage.getItem('asset_mgmt_audit_sessions');
       const usersStr = localStorage.getItem('asset_mgmt_users');
       const catStr = localStorage.getItem('asset_mgmt_periodic_categories');
+      const setsStr = localStorage.getItem('asset_mgmt_surgical_sets');
+      const instStr = localStorage.getItem('asset_mgmt_surgical_instruments');
 
       const assets: Asset[] = assetsStr ? JSON.parse(assetsStr) : [];
       const tickets: MaintenanceTicket[] = ticketsStr ? JSON.parse(ticketsStr) : [];
@@ -732,6 +915,8 @@ export class FirestoreSyncService {
       const audits: AuditSession[] = auditsStr ? JSON.parse(auditsStr) : [];
       const users: User[] = usersStr ? JSON.parse(usersStr) : [];
       const categories: string[] = catStr ? JSON.parse(catStr) : [];
+      const sets: SurgicalSet[] = setsStr ? JSON.parse(setsStr) : [];
+      const instruments: SurgicalInstrument[] = instStr ? JSON.parse(instStr) : [];
 
       // Batch push assets in chunks of 250
       for (let i = 0; i < assets.length; i += 250) {
@@ -795,6 +980,32 @@ export class FirestoreSyncService {
         });
       }
 
+      // Batch push surgical sets
+      if (sets.length > 0) {
+        for (let i = 0; i < sets.length; i += 250) {
+          const batch = writeBatch(db);
+          const chunk = sets.slice(i, i + 250);
+          chunk.forEach((s) => {
+            const ref = doc(db, 'surgical_sets', s.id);
+            batch.set(ref, cleanForFirestore(s), { merge: true });
+          });
+          await batch.commit();
+        }
+      }
+
+      // Batch push surgical instruments (with images)
+      if (instruments.length > 0) {
+        for (let i = 0; i < instruments.length; i += 100) {
+          const batch = writeBatch(db);
+          const chunk = instruments.slice(i, i + 100);
+          chunk.forEach((inst) => {
+            const ref = doc(db, 'surgical_instruments', inst.id);
+            batch.set(ref, cleanForFirestore(inst), { merge: true });
+          });
+          await batch.commit();
+        }
+      }
+
       // Initialize/Reset Meta Doc
       await setDoc(doc(db, 'settings', 'sync_meta'), {
         version: 1,
@@ -810,7 +1021,7 @@ export class FirestoreSyncService {
       this.isSyncing = false;
       return {
         success: true,
-        message: `تمت المزامنة السحابية بنجاح (${assets.length} أصل، ${tickets.length} بلاغ، ${periodic.length} صيانة دورية، ${audits.length} جلسة جرد، ${users.length} مستخدم)`,
+        message: `تمت المزامنة السحابية بنجاح (${assets.length} أصل، ${tickets.length} بلاغ، ${sets.length} سيت جراحي، ${instruments.length} أداة جراحية، ${users.length} مستخدم)`,
       };
     } catch (err: any) {
       this.isSyncing = false;
@@ -824,7 +1035,15 @@ export class FirestoreSyncService {
    */
   static async clearAllCloudData(): Promise<void> {
     try {
-      const collections = ['assets', 'tickets', 'periodic_records', 'audit_sessions', 'users'];
+      const collections = [
+        'assets',
+        'tickets',
+        'periodic_records',
+        'audit_sessions',
+        'users',
+        'surgical_sets',
+        'surgical_instruments',
+      ];
       for (const col of collections) {
         const snap = await getDocs(collection(db, col));
         const batch = writeBatch(db);

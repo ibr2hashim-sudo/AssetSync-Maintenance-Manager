@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { FirestoreSyncService } from '../services/firestoreSync';
 import { StorageService } from '../services/storage';
+import { SurgicalStorageService } from '../services/surgicalStorage';
 import { ExcelUtils } from '../utils/excelImportExport';
 import { User } from '../types';
 
@@ -73,7 +74,7 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
     }
   };
 
-  // Export Comprehensive Excel (6 sheets)
+  // Export Comprehensive Excel
   const handleExportComprehensiveExcel = () => {
     try {
       const users = StorageService.getUsers();
@@ -81,6 +82,8 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
       const tickets = StorageService.getTickets();
       const periodicRecords = StorageService.getPeriodicRecords();
       const history = StorageService.getHistory();
+      const surgicalSets = SurgicalStorageService.getSets();
+      const surgicalInstruments = SurgicalStorageService.getInstruments();
 
       ExcelUtils.exportComprehensiveDatabaseToXLSX({
         users,
@@ -88,10 +91,12 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
         tickets,
         periodicRecords,
         history,
+        surgicalSets,
+        surgicalInstruments,
       });
 
       setStatusMsg({
-        text: 'تم إنشاء وتنزيل ملف Excel الشامل (6 صفحات) بنجاح.',
+        text: 'تم إنشاء وتنزيل ملف Excel الشامل (يشمل الأصول، الصيانة، والسيتات الجراحية) بنجاح.',
         type: 'success',
       });
     } catch (err: any) {
@@ -269,7 +274,7 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
                     </span>
                   </div>
                   <p className="text-[11px] text-slate-500">
-                    ملف إكسل متكامل يحتوي على 6 صفحات تشمل الأصول، الصيانة، والمستخدمين
+                    ملف إكسل متكامل يشمل الأصول، الصيانة، المستخدمين، والسيتات والأدوات الجراحية
                   </p>
                 </div>
               </div>
@@ -282,7 +287,7 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
                 className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold transition-all shadow-xs text-xs"
               >
                 <Download className="w-4 h-4" />
-                <span>تصدير ملف Excel (6 صفحات)</span>
+                <span>تصدير ملف Excel الشامل</span>
               </button>
 
               <label className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 font-bold cursor-pointer transition-all shadow-xs text-xs">

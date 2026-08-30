@@ -2,6 +2,7 @@ import * as XLSX from 'xlsx';
 import JSZip from 'jszip';
 import { SurgicalInstrument, SurgicalSet, SurgicalSetStatus, InstrumentStatus } from '../types';
 import { saveImageToDB, getImageFromDB } from './storage';
+import { FirestoreSyncService } from './firestoreSync';
 
 // Start clean with empty sets and instruments
 const STORAGE_KEYS = {
@@ -90,14 +91,20 @@ export class SurgicalService {
       sets.unshift(set);
     }
     this.saveSets(sets);
+    FirestoreSyncService.syncSurgicalSet(set);
   }
 
   static deleteSet(id: string): void {
     const sets = this.getSets().filter((s) => s.id !== id);
     this.saveSets(sets);
+    FirestoreSyncService.deleteSurgicalSet(id);
+
     // Also remove associated instruments
-    const instruments = this.getInstruments().filter((i) => i.setId !== id);
-    this.saveInstruments(instruments);
+    const instruments = this.getInstruments();
+    const removed = instruments.filter((i) => i.setId === id);
+    const remaining = instruments.filter((i) => i.setId !== id);
+    this.saveInstruments(remaining);
+    removed.forEach((inst) => FirestoreSyncService.deleteSurgicalInstrument(inst.id));
   }
 
   // ==========================================
@@ -140,11 +147,13 @@ export class SurgicalService {
       instruments.push(instrument);
     }
     this.saveInstruments(instruments);
+    FirestoreSyncService.syncSurgicalInstrument(instrument);
   }
 
   static deleteInstrument(id: string): void {
     const instruments = this.getInstruments().filter((i) => i.id !== id);
     this.saveInstruments(instruments);
+    FirestoreSyncService.deleteSurgicalInstrument(id);
   }
 
   // ==========================================
@@ -316,6 +325,12 @@ export class SurgicalService {
 
           this.saveSets(existingSets);
           this.saveInstruments(existingInstruments);
+
+          // Push new sets and instruments to Cloud Firestore
+          setsMap.forEach((entry) => {
+            FirestoreSyncService.syncSurgicalSet(entry.set);
+            entry.instruments.forEach((inst) => FirestoreSyncService.syncSurgicalInstrument(inst));
+          });
 
           resolve({
             setsCreated: newSetsAdded,
@@ -593,3 +608,6 @@ export class SurgicalService {
     });
   }
 }
+
+export { SurgicalService as SurgicalStorageService };
+
