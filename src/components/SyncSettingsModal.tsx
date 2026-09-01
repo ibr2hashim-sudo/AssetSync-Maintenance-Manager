@@ -163,13 +163,13 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
             </div>
             <div>
               <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                <span>المزامنة والنظام الاقتصادي</span>
+                <span>المزامنة</span>
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold border border-emerald-200">
                   نشط 🟢
                 </span>
               </h3>
               <p className="text-xs text-slate-500">
-                مزامنة فورية حية بين كافة الأجهزة مع توفير الحصة اليومية
+                مزامنة فورية حية بين كافة الأجهزة
               </p>
             </div>
           </div>
@@ -203,7 +203,7 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
           </div>
         )}
 
-        {/* Section 1: Economic Cloud Sync (Visible to Everyone) */}
+        {/* Section 1: Central Cloud Sync (Visible to Everyone) */}
         <div className="p-4 rounded-2xl bg-gradient-to-br from-blue-50/70 via-indigo-50/40 to-slate-50 border border-blue-100/80 space-y-3.5">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
@@ -214,9 +214,6 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
                 <h4 className="font-bold text-slate-900 text-sm">
                   قاعدة البيانات السحابية المركزية (Firebase)
                 </h4>
-                <p className="text-[11px] text-slate-500">
-                  وضع التوفير الذكي: استماع للنبضات ونقل التعديلات فقط
-                </p>
               </div>
             </div>
           </div>
@@ -227,9 +224,6 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
               <span className="font-semibold">حالة الربط السحابي:</span>
               <span className="text-emerald-700 font-bold">متصل ومزامن</span>
             </div>
-            <span className="font-bold text-blue-700 bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-100 text-[11px]">
-              توفير ~{FirestoreSyncService.getEstimatedSavedReads().toLocaleString('ar-EG')} قراءة اليوم 🛡️
-            </span>
           </div>
 
           {/* Action Buttons for Eco Sync */}

@@ -31,7 +31,6 @@ import { UserManagementView } from './components/UserManagementView';
 import { SyncSettingsModal } from './components/SyncSettingsModal';
 import { HistoryModal } from './components/HistoryModal';
 import { FactoryResetModal } from './components/FactoryResetModal';
-import { SwitchUserModal } from './components/SwitchUserModal';
 
 type ActiveView = 'dashboard' | 'assets' | 'tickets' | 'periodic' | 'audit' | 'surgical' | 'users';
 
@@ -53,7 +52,6 @@ export default function App() {
   const [showSyncModal, setShowSyncModal] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [showFactoryResetModal, setShowFactoryResetModal] = useState(false);
-  const [showSwitchUserModal, setShowSwitchUserModal] = useState(false);
 
   // Cross-view action state (e.g. create ticket for specific asset)
   const [ticketTargetAsset, setTicketTargetAsset] = useState<Asset | null>(null);
@@ -153,7 +151,6 @@ export default function App() {
         onOpenHistory={() => setShowHistoryModal(true)}
         onOpenReset={() => setShowFactoryResetModal(true)}
         onOpenSyncSettings={() => setShowSyncModal(true)}
-        onOpenSwitchUser={() => setShowSwitchUserModal(true)}
         onLogout={() => {
           StorageService.logout();
           reloadData();
@@ -165,19 +162,11 @@ export default function App() {
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
         {/* Role Notice for Supervisor */}
         {currentUser?.role === 'supervisor' && (
-          <div className="bg-purple-50 border border-purple-200 rounded-2xl p-3.5 flex items-center justify-between text-xs text-purple-900 shadow-xs">
-            <div className="flex items-center gap-2">
-              <Building2 className="w-4 h-4 text-purple-600" />
-              <span>
-                أنت مسجل كـ <strong>مشرف قسم</strong> على: <strong>{currentUser.assignedDepartment || 'غير محدد'}</strong> (عرض وتقديم بلاغات قسمك فقط).
-              </span>
-            </div>
-            <button
-              onClick={() => setShowSwitchUserModal(true)}
-              className="text-purple-700 font-bold hover:underline"
-            >
-              تبديل الحساب
-            </button>
+          <div className="bg-purple-50 border border-purple-200 rounded-2xl p-3.5 flex items-center gap-2 text-xs text-purple-900 shadow-xs">
+            <Building2 className="w-4 h-4 text-purple-600 shrink-0" />
+            <span>
+              أنت مسجل كـ <strong>مشرف قسم</strong> على: <strong>{currentUser.assignedDepartment || 'غير محدد'}</strong> (عرض وتقديم بلاغات قسمك فقط).
+            </span>
           </div>
         )}
 
@@ -400,19 +389,6 @@ export default function App() {
             setShowFactoryResetModal(false);
             reloadData();
             setActiveView('dashboard');
-          }}
-        />
-      )}
-
-      {/* Switch User Modal */}
-      {showSwitchUserModal && (
-        <SwitchUserModal
-          users={users}
-          currentUser={currentUser}
-          onClose={() => setShowSwitchUserModal(false)}
-          onUserSwitched={(user) => {
-            setCurrentUser(user);
-            reloadData();
           }}
         />
       )}

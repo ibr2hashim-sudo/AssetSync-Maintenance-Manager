@@ -40,7 +40,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
 
   // Departments list to assign to supervisors
   const departmentsList = useMemo(() => {
-    return Array.from(new Set(safeAssets.map((a) => a.mainDepartment).filter(Boolean)));
+    return (Array.from(new Set(safeAssets.map((a) => a.mainDepartment).filter(Boolean))) as string[]).sort((a, b) => a.localeCompare(b, 'ar'));
   }, [safeAssets]);
 
   const activeCount = safeUsers.filter((u) => u.isActive !== false).length;

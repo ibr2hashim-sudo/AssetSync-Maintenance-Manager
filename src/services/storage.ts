@@ -13,6 +13,7 @@ import {
   AuditSessionStatus,
 } from '../types';
 import { FirestoreSyncService } from './firestoreSync';
+import JSZip from 'jszip';
 
 const STORAGE_KEYS = {
   USERS: 'asset_mgmt_users',
@@ -1887,6 +1888,61 @@ export class StorageService {
     }
 
     return report;
+  }
+
+  // Export Asset Images to ZIP
+  static async exportAssetImagesToZip(
+    assetsList?: Asset[],
+    onProgress?: (percent: number, currentFileName: string) => void
+  ): Promise<{ blob: Blob; count: number; filename: string }> {
+    const assets = assetsList || this.getAssets();
+    const zip = new JSZip();
+    let exportedCount = 0;
+
+    for (let i = 0; i < assets.length; i++) {
+      const asset = assets[i];
+      if (onProgress) {
+        onProgress(Math.round(((i + 1) / assets.length) * 100), asset.deviceName || asset.customId);
+      }
+
+      let dataUrl: string | null = null;
+      if (asset.imageUrl && asset.imageUrl.startsWith('data:image/')) {
+        dataUrl = asset.imageUrl;
+      } else {
+        dataUrl =
+          (await getImageFromDB(asset.customId)) ||
+          (asset.serialNumber && asset.serialNumber !== 'غير محدد' ? await getImageFromDB(asset.serialNumber) : null) ||
+          null;
+      }
+
+      if (dataUrl && dataUrl.startsWith('data:image/')) {
+        const matches = dataUrl.match(/^data:image\/([a-zA-Z0-9]+);base64,(.+)$/);
+        if (matches && matches[2]) {
+          const ext = matches[1] === 'jpeg' ? 'jpg' : matches[1];
+          const base64Data = matches[2];
+
+          const safeCode = (asset.customId || asset.id).replace(/[/\\?%*:|"<>]/g, '-');
+          const safeName = (asset.deviceName || '').replace(/[/\\?%*:|"<>]/g, '_');
+          const fileName = safeName ? `${safeCode}_${safeName}.${ext}` : `${safeCode}.${ext}`;
+
+          zip.file(fileName, base64Data, { base64: true });
+          exportedCount++;
+        }
+      }
+    }
+
+    if (exportedCount === 0) {
+      throw new Error('لا توجد صور مسجلة للأجهزة أو العهد لتصديرها.');
+    }
+
+    const zipBlob = await zip.generateAsync({ type: 'blob' });
+    const zipName = `صور_الأصول_والأجهزة_${new Date().toISOString().split('T')[0]}.zip`;
+
+    return {
+      blob: zipBlob,
+      count: exportedCount,
+      filename: zipName,
+    };
   }
 
   // Compress image before storing to prevent localStorage overflow

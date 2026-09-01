@@ -351,7 +351,8 @@ export class SurgicalService {
   // ==========================================
   static async batchImportImages(
     files: File[],
-    targetSetId?: string
+    targetSetId?: string,
+    onProgress?: (percent: number, currentFileName: string, processedCount: number, totalCount: number) => void
   ): Promise<{
     total: number;
     matched: number;
@@ -385,7 +386,12 @@ export class SurgicalService {
       codeMap.set(inst.code.trim().toLowerCase(), inst);
     });
 
-    for (const file of files) {
+    for (let idx = 0; idx < files.length; idx++) {
+      const file = files[idx];
+      if (onProgress) {
+        onProgress(Math.round(((idx + 1) / files.length) * 100), file.name, idx + 1, files.length);
+      }
+
       if (!file.type.startsWith('image/')) {
         results.push({
           fileName: file.name,

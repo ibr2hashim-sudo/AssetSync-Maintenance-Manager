@@ -73,6 +73,12 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
 
   // Batch Image Import State
   const [isProcessingImages, setIsProcessingImages] = useState(false);
+  const [imageImportProgress, setImageImportProgress] = useState<{
+    percent: number;
+    currentFile: string;
+    currentCount: number;
+    totalCount: number;
+  } | null>(null);
   const [batchImportReport, setBatchImportReport] = useState<{
     total: number;
     matched: number;
@@ -150,21 +156,23 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
 
   // Filtered Sets
   const filteredSets = useMemo(() => {
-    return sets.filter((set) => {
-      if (selectedDeptFilter !== 'all' && set.department !== selectedDeptFilter) return false;
-      if (selectedStatusFilter !== 'all' && set.status !== selectedStatusFilter) return false;
-      if (searchTerm.trim()) {
-        const q = searchTerm.toLowerCase();
-        return (
-          set.name.toLowerCase().includes(q) ||
-          set.code.toLowerCase().includes(q) ||
-          (set.subLocation && set.subLocation.toLowerCase().includes(q)) ||
-          (set.trayNumber && set.trayNumber.toLowerCase().includes(q)) ||
-          (set.notes && set.notes.toLowerCase().includes(q))
-        );
-      }
-      return true;
-    });
+    return sets
+      .filter((set) => {
+        if (selectedDeptFilter !== 'all' && set.department !== selectedDeptFilter) return false;
+        if (selectedStatusFilter !== 'all' && set.status !== selectedStatusFilter) return false;
+        if (searchTerm.trim()) {
+          const q = searchTerm.toLowerCase();
+          return (
+            set.name.toLowerCase().includes(q) ||
+            set.code.toLowerCase().includes(q) ||
+            (set.subLocation && set.subLocation.toLowerCase().includes(q)) ||
+            (set.trayNumber && set.trayNumber.toLowerCase().includes(q)) ||
+            (set.notes && set.notes.toLowerCase().includes(q))
+          );
+        }
+        return true;
+      })
+      .sort((a, b) => a.name.localeCompare(b.name, 'ar'));
   }, [sets, selectedDeptFilter, selectedStatusFilter, searchTerm]);
 
   // Filtered Instruments for Active Set
@@ -217,16 +225,34 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
     if (!files || files.length === 0) return;
 
     setIsProcessingImages(true);
+    setImageImportProgress({
+      percent: 0,
+      currentFile: files[0].name,
+      currentCount: 0,
+      totalCount: files.length,
+    });
+
     try {
       const fileList: File[] = Array.from(files);
-      const report = await SurgicalService.batchImportImages(fileList, batchImageTargetSetId);
+      const report = await SurgicalService.batchImportImages(
+        fileList,
+        batchImageTargetSetId,
+        (percent, currentFileName, currentCount, totalCount) => {
+          setImageImportProgress({
+            percent,
+            currentFile: currentFileName,
+            currentCount,
+            totalCount,
+          });
+        }
+      );
       setBatchImportReport(report);
       setShowBatchImageModal(true);
       loadData();
 
       StorageService.addHistoryLog(
         'أصول',
-        'استيراد صور أدوات جراحية دفعة واحدة',
+        'استيراد صور أدوات جراحية',
         `تمت مطابقة وحفظ ${report.matched} صورة من أصل ${report.total} ملف`,
         currentUser?.fullName || 'مستخدم',
         currentUser?.role || 'admin'
@@ -235,6 +261,7 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
       alert(`❌ حدث خطأ أثناء معالجة الصور: ${err?.message || ''}`);
     } finally {
       setIsProcessingImages(false);
+      setImageImportProgress(null);
       if (batchImageInputRef.current) batchImageInputRef.current.value = '';
     }
   };
@@ -392,10 +419,10 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
             }}
             disabled={isProcessingImages}
             className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-indigo-600/90 hover:bg-indigo-600 text-white text-xs font-bold shadow-md transition-all cursor-pointer"
-            title="استيراد مجموعة صور وربطها تلقائياً مع أكواد الأدوات (مثل OB-1.jpg)"
+            title="استيراد صور الأدوات ومطابقتها تلقائياً مع الأكواد (مثل OB-1.jpg)"
           >
             <UploadCloud className="w-4 h-4" />
-            <span>{isProcessingImages ? 'جارِ المعالجة...' : 'استيراد صور بالدفعة'}</span>
+            <span>{isProcessingImages ? 'جارِ المعالجة...' : 'استيراد صور'}</span>
           </button>
 
           {/* Batch Image Export ZIP */}
@@ -1079,6 +1106,51 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
       )}
 
       {/* ========================================================================= */}
+      {/* MODAL: IMAGE IMPORT PROGRESS BAR */}
+      {/* ========================================================================= */}
+      {imageImportProgress && (
+        <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4 text-right">
+            <div className="flex items-center justify-between border-b pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center animate-pulse">
+                  <UploadCloud className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">جاري استيراد ومطابقة الصور</h3>
+                  <p className="text-xs text-slate-500">يرجى الانتظار حتى اكتمال معالجة الملفات...</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-3 py-2">
+              <div className="flex items-center justify-between text-xs font-bold">
+                <span className="text-slate-600 truncate max-w-[200px]" title={imageImportProgress.currentFile}>
+                  الملف: {imageImportProgress.currentFile}
+                </span>
+                <span className="text-indigo-600 font-mono text-sm">{imageImportProgress.percent}%</span>
+              </div>
+
+              {/* Visual Progress Bar */}
+              <div className="w-full h-3 rounded-full bg-slate-100 overflow-hidden p-0.5 border border-slate-200">
+                <div
+                  className="h-full bg-gradient-to-r from-indigo-500 to-blue-600 rounded-full transition-all duration-200"
+                  style={{ width: `${imageImportProgress.percent}%` }}
+                />
+              </div>
+
+              <div className="flex items-center justify-between text-[11px] text-slate-500">
+                <span>تمت معالجة {imageImportProgress.currentCount} من أصل {imageImportProgress.totalCount} صورة</span>
+                <span className="flex items-center gap-1 text-indigo-600 font-bold">
+                  <RefreshCw className="w-3 h-3 animate-spin" /> جاري الحفظ
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
       {/* MODAL: BATCH IMAGE IMPORT REPORT */}
       {/* ========================================================================= */}
       {showBatchImageModal && batchImportReport && (
@@ -1409,16 +1481,16 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                   <label className="block font-bold text-slate-700 mb-1">القسم الرئيسي</label>
                   <select
                     name="department"
-                    defaultValue={editingSet?.department || 'العمليات (OR)'}
+                    defaultValue={editingSet?.department || 'الجراحة العامة'}
                     className="w-full p-2.5 rounded-xl border border-slate-300 text-xs font-bold"
                   >
-                    <option value="العمليات (OR)">العمليات (OR)</option>
-                    <option value="قسم التعقيم المركزي (CSSD)">قسم التعقيم المركزي (CSSD)</option>
-                    <option value="جراحة العظام">جراحة العظام</option>
-                    <option value="جراحة المسالك">جراحة المسالك</option>
-                    <option value="النساء والتوليد">النساء والتوليد</option>
                     <option value="الجراحة العامة">الجراحة العامة</option>
                     <option value="الطوارئ">الطوارئ</option>
+                    <option value="العمليات (OR)">العمليات (OR)</option>
+                    <option value="النساء والتوليد">النساء والتوليد</option>
+                    <option value="جراحة العظام">جراحة العظام</option>
+                    <option value="جراحة المسالك">جراحة المسالك</option>
+                    <option value="قسم التعقيم المركزي (CSSD)">قسم التعقيم المركزي (CSSD)</option>
                   </select>
                 </div>
                 <div>

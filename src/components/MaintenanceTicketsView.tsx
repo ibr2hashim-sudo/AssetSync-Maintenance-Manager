@@ -119,7 +119,7 @@ export const MaintenanceTicketsView: React.FC<MaintenanceTicketsViewProps> = ({
     if (currentUser?.role === 'supervisor') {
       return currentUser.assignedDepartment ? [currentUser.assignedDepartment] : [];
     }
-    return Array.from(new Set(safeTickets.map((t) => t.mainDepartment).filter(Boolean)));
+    return (Array.from(new Set(safeTickets.map((t) => t.mainDepartment).filter(Boolean))) as string[]).sort((a, b) => a.localeCompare(b, 'ar'));
   }, [safeTickets, currentUser]);
 
   // Count badges

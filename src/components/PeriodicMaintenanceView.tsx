@@ -85,7 +85,7 @@ export const PeriodicMaintenanceView: React.FC<PeriodicMaintenanceViewProps> = (
     if (currentUser?.role === 'supervisor') {
       return currentUser.assignedDepartment ? [currentUser.assignedDepartment] : [];
     }
-    return Array.from(new Set(safeAssets.map((a) => a.mainDepartment).filter(Boolean)));
+    return (Array.from(new Set(safeAssets.map((a) => a.mainDepartment).filter(Boolean))) as string[]).sort((a, b) => a.localeCompare(b, 'ar'));
   }, [safeAssets, currentUser]);
 
   // Filtered records based on active hierarchy

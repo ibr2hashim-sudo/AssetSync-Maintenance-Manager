@@ -151,7 +151,7 @@ export const AuditView: React.FC<AuditViewProps> = ({
         depts.add(item.mainDepartment.trim());
       }
     });
-    return Array.from(depts).filter(Boolean).sort();
+    return Array.from(depts).filter(Boolean).sort((a, b) => a.localeCompare(b, 'ar'));
   }, [activeSession]);
 
   // Filtered items to be rendered in the Printable Landscape Report
@@ -221,7 +221,7 @@ export const AuditView: React.FC<AuditViewProps> = ({
         set.add(a.mainDepartment.trim());
       }
     });
-    return Array.from(set).sort();
+    return Array.from(set).sort((a, b) => a.localeCompare(b, 'ar'));
   }, [assets]);
 
   // Guard: Admin and Technician only

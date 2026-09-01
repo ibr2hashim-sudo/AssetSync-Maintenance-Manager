@@ -23,6 +23,7 @@ import {
   Info,
   Wrench,
   RefreshCw,
+  FolderArchive,
 } from 'lucide-react';
 import { Asset, DeviceStatus, ImageImportReport, User } from '../types';
 import { StorageService } from '../services/storage';
@@ -85,6 +86,7 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
   const [showBulkImageModal, setShowBulkImageModal] = useState(false);
   const [bulkProgress, setBulkProgress] = useState<{ percent: number; currentFile: string } | null>(null);
   const [bulkReport, setBulkReport] = useState<ImageImportReport | null>(null);
+  const [isExportingImagesZip, setIsExportingImagesZip] = useState(false);
 
   // Excel Import Status
   const [importNotice, setImportNotice] = useState<{ type: 'success' | 'error'; message: string; errors?: string[] } | null>(null);
@@ -118,7 +120,7 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
   }, [accessibleAssets]);
 
   const mainDepartmentList = useMemo(() => {
-    return Object.keys(departmentsHierarchy);
+    return Object.keys(departmentsHierarchy).sort((a, b) => a.localeCompare(b, 'ar'));
   }, [departmentsHierarchy]);
 
   // Handle Clicking on a Main Department
@@ -194,7 +196,10 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
       list = list.filter((a) => a.status === statusFilter);
     }
 
-    return list;
+    // Sort Assets strictly by Code (customId)
+    return [...list].sort((a, b) =>
+      a.customId.localeCompare(b.customId, undefined, { numeric: true, sensitivity: 'base' })
+    );
   }, [accessibleAssets, selectedDept, selectedSubDept, searchTerm, statusFilter]);
 
   // Handle Excel/CSV File Upload
@@ -277,6 +282,27 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
     } finally {
       setBulkProgress(null);
       if (bulkImageInputRef.current) bulkImageInputRef.current.value = '';
+    }
+  };
+
+  // Handle Export Images to ZIP
+  const handleExportImagesZip = async () => {
+    setIsExportingImagesZip(true);
+    try {
+      const result = await StorageService.exportAssetImagesToZip(accessibleAssets);
+      const url = URL.createObjectURL(result.blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = result.filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      alert(`✅ تم تصدير ${result.count} صورة بنجاح في ملف مضغوط ZIP (${result.filename})`);
+    } catch (err: any) {
+      alert(err?.message || '❌ حدث خطأ أثناء تصدير الصور');
+    } finally {
+      setIsExportingImagesZip(false);
     }
   };
 
@@ -425,6 +451,25 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
               >
                 <Download className="w-3.5 h-3.5 text-slate-600" />
                 تصدير CSV
+              </button>
+
+              <button
+                onClick={handleExportImagesZip}
+                disabled={isExportingImagesZip}
+                title="تصدير جميع صور الأجهزة والعهد الطبية في ملف مضغوط ZIP"
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 text-xs font-bold transition-colors disabled:opacity-50"
+              >
+                {isExportingImagesZip ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 text-purple-600 animate-spin" />
+                    جارِ الضغط...
+                  </>
+                ) : (
+                  <>
+                    <FolderArchive className="w-3.5 h-3.5 text-purple-600" />
+                    تصدير الصور (ZIP)
+                  </>
+                )}
               </button>
             </>
           )}
@@ -723,7 +768,9 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {(Array.from(departmentsHierarchy[selectedDept] || []) as string[]).map((subName: string) => {
+            {(Array.from(departmentsHierarchy[selectedDept] || []) as string[])
+              .sort((a, b) => a.localeCompare(b, 'ar'))
+              .map((subName: string) => {
               const subAssets = accessibleAssets.filter(
                 (a) =>
                   a.mainDepartment.trim() === selectedDept.trim() &&
