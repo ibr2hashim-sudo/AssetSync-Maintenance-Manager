@@ -1922,8 +1922,7 @@ export class StorageService {
           const base64Data = matches[2];
 
           const safeCode = (asset.customId || asset.id).replace(/[/\\?%*:|"<>]/g, '-');
-          const safeName = (asset.deviceName || '').replace(/[/\\?%*:|"<>]/g, '_');
-          const fileName = safeName ? `${safeCode}_${safeName}.${ext}` : `${safeCode}.${ext}`;
+          const fileName = `${safeCode}.${ext}`;
 
           zip.file(fileName, base64Data, { base64: true });
           exportedCount++;

@@ -494,10 +494,9 @@ export class SurgicalService {
           const ext = matches[1] === 'jpeg' ? 'jpg' : matches[1];
           const base64Data = matches[2];
           
-          // Clean file name: OB-1_Hohmann_Retractor.jpg
+          // Clean file name: OB-1.jpg (code only)
           const safeCode = inst.code.replace(/[/\\?%*:|"<>]/g, '-');
-          const safeName = inst.name.replace(/[/\\?%*:|"<>]/g, '_');
-          const fileName = `${safeCode}_${safeName}.${ext}`;
+          const fileName = `${safeCode}.${ext}`;
 
           zip.file(fileName, base64Data, { base64: true });
           exportedCount++;
