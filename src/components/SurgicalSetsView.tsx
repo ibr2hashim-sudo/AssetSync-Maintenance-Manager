@@ -42,6 +42,7 @@ import {
   extractCodeFromFileName,
 } from '../services/surgicalStorage';
 import { StorageService } from '../services/storage';
+import { SurgicalImage, resolveSurgicalImageUrl } from './SurgicalImage';
 
 interface SurgicalSetsViewProps {
   currentUser: User | null;
@@ -63,8 +64,10 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
   // Modals state
   const [showAddSetModal, setShowAddSetModal] = useState(false);
   const [editingSet, setEditingSet] = useState<SurgicalSet | null>(null);
+  const [setModalImageUrl, setSetModalImageUrl] = useState<string | null>(null);
   const [showAddInstModal, setShowAddInstModal] = useState(false);
   const [editingInst, setEditingInst] = useState<SurgicalInstrument | null>(null);
+  const [instModalImageUrl, setInstModalImageUrl] = useState<string | null>(null);
   const [showBatchImageModal, setShowBatchImageModal] = useState(false);
   const [batchImageTargetSetId, setBatchImageTargetSetId] = useState<string | undefined>(undefined);
   const [showChecklistModal, setShowChecklistModal] = useState(false);
@@ -93,7 +96,9 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
   const excelFileInputRef = useRef<HTMLInputElement>(null);
   const batchImageInputRef = useRef<HTMLInputElement>(null);
   const singleImageInputRef = useRef<HTMLInputElement>(null);
+  const setCoverInputRef = useRef<HTMLInputElement>(null);
   const [targetInstForImage, setTargetInstForImage] = useState<SurgicalInstrument | null>(null);
+  const [targetSetForImage, setTargetSetForImage] = useState<SurgicalSet | null>(null);
 
   // Instrument search & view mode in Active Set
   const [instSearchTerm, setInstSearchTerm] = useState('');
@@ -129,6 +134,15 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
 
   useEffect(() => {
     loadData();
+    // Background recovery of any images previously imported and stored in IndexedDB
+    SurgicalService.syncAndRecoverInstrumentImages().then((recovered) => {
+      if (recovered > 0) {
+        const s = SurgicalService.getSets();
+        const inst = SurgicalService.getInstruments();
+        setSets(s);
+        setInstruments(inst);
+      }
+    });
   }, []);
 
   // Summary Metrics
@@ -285,6 +299,25 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
     }
   };
 
+  // Handle Direct Set Cover Image Upload
+  const handleSetCoverUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !targetSetForImage) return;
+
+    try {
+      const base64 = await SurgicalService.fileToBase64(file);
+      targetSetForImage.imageUrl = base64;
+      SurgicalService.saveSet(targetSetForImage);
+      loadData();
+      alert(`✅ تم تعيين صورة غلاف السيت (${targetSetForImage.name}) بنجاح`);
+    } catch (err: any) {
+      alert(`❌ فشل تعيين صورة السيت: ${err?.message}`);
+    } finally {
+      setTargetSetForImage(null);
+      if (setCoverInputRef.current) setCoverInputRef.current.value = '';
+    }
+  };
+
   // Handle Export ZIP of Images
   const handleExportImagesZip = async (setId?: string) => {
     setIsExportingZip(true);
@@ -367,6 +400,13 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
         accept="image/*"
         className="hidden"
       />
+      <input
+        type="file"
+        ref={setCoverInputRef}
+        onChange={handleSetCoverUpload}
+        accept="image/*"
+        className="hidden"
+      />
 
       {/* ========================================================================= */}
       {/* HEADER & HERO BANNER */}
@@ -392,6 +432,7 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
             <button
               onClick={() => {
                 setEditingSet(null);
+                setSetModalImageUrl(null);
                 setShowAddSetModal(true);
               }}
               className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-md shadow-blue-600/30 transition-all cursor-pointer"
@@ -565,7 +606,11 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
               </p>
               <div className="pt-2 flex items-center justify-center gap-2">
                 <button
-                  onClick={() => setShowAddSetModal(true)}
+                  onClick={() => {
+                    setEditingSet(null);
+                    setSetModalImageUrl(null);
+                    setShowAddSetModal(true);
+                  }}
                   className="px-4 py-2 rounded-xl bg-blue-600 text-white text-xs font-bold"
                 >
                   إضافة سيت جديد
@@ -596,16 +641,39 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                       {/* Set Card Top Header */}
                       <div className="p-5 border-b border-slate-100 flex items-start justify-between gap-3">
                         <div className="flex items-start gap-3">
-                          <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center shadow-md shadow-blue-500/20 shrink-0">
-                            {set.imageUrl ? (
-                              <img
-                                src={set.imageUrl}
-                                alt={set.name}
-                                className="w-full h-full object-cover rounded-2xl"
-                              />
-                            ) : (
-                              <Layers className="w-6 h-6" />
-                            )}
+                          <div className="relative group/setimg w-12 h-12 rounded-2xl overflow-hidden border border-slate-200/80 shadow-md shadow-blue-500/10 shrink-0 bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center">
+                            <SurgicalImage
+                              src={set.imageUrl}
+                              setId={set.id}
+                              code={set.code}
+                              alt={set.name}
+                              className="w-full h-full object-cover cursor-pointer"
+                              containerClassName="w-full h-full flex items-center justify-center"
+                              fallbackIcon={<Layers className="w-6 h-6 text-white" />}
+                              onClick={() => {
+                                resolveSurgicalImageUrl({ imageUrl: set.imageUrl, setId: set.id, code: set.code }).then((url) => {
+                                  if (url) {
+                                    setPreviewImageUrl(url);
+                                    setPreviewImageTitle(`غلاف سيت: ${set.name}`);
+                                  } else {
+                                    setTargetSetForImage(set);
+                                    setCoverInputRef.current?.click();
+                                  }
+                                });
+                              }}
+                              title="انقر لعرض أو تغيير صورة غلاف السيت"
+                            />
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setTargetSetForImage(set);
+                                setCoverInputRef.current?.click();
+                              }}
+                              className="absolute inset-0 bg-black/50 text-white opacity-0 group-hover/setimg:opacity-100 flex items-center justify-center transition-opacity cursor-pointer"
+                              title="تغيير صورة غلاف السيت"
+                            >
+                              <Camera className="w-4 h-4" />
+                            </button>
                           </div>
                           <div>
                             <div className="flex items-center gap-2">
@@ -672,10 +740,20 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                       <div className="flex items-center gap-1">
                         <button
                           onClick={() => {
+                            setTargetSetForImage(set);
+                            setCoverInputRef.current?.click();
+                          }}
+                          title="تغيير أو اختيار صورة غلاف السيت"
+                          className="p-2 rounded-xl bg-white hover:bg-blue-50 text-blue-600 border border-slate-200 transition-colors"
+                        >
+                          <Camera className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => {
                             setBatchImageTargetSetId(set.id);
                             batchImageInputRef.current?.click();
                           }}
-                          title="استيراد صور لهذا السيت بالتحديد"
+                          title="استيراد صور أدوات هذا السيت دفعة واحدة (مطابقة بالأكواد)"
                           className="p-2 rounded-xl bg-white hover:bg-indigo-50 text-indigo-600 border border-slate-200 transition-colors"
                         >
                           <UploadCloud className="w-4 h-4" />
@@ -692,6 +770,7 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                             <button
                               onClick={() => {
                                 setEditingSet(set);
+                                setSetModalImageUrl(set.imageUrl || null);
                                 setShowAddSetModal(true);
                               }}
                               title="تعديل بيانات السيت"
@@ -735,6 +814,42 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                 <span>العودة لكل السيتات</span>
               </button>
               <div className="h-5 w-[1px] bg-slate-200" />
+              
+              {/* Set Cover Thumbnail */}
+              <div className="relative group/activesetimg w-10 h-10 rounded-xl overflow-hidden border border-slate-200 bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center shrink-0">
+                <SurgicalImage
+                  src={activeSet.imageUrl}
+                  setId={activeSet.id}
+                  code={activeSet.code}
+                  alt={activeSet.name}
+                  className="w-full h-full object-cover cursor-pointer"
+                  containerClassName="w-full h-full flex items-center justify-center"
+                  fallbackIcon={<Layers className="w-5 h-5 text-white" />}
+                  onClick={() => {
+                    resolveSurgicalImageUrl({ imageUrl: activeSet.imageUrl, setId: activeSet.id, code: activeSet.code }).then((url) => {
+                      if (url) {
+                        setPreviewImageUrl(url);
+                        setPreviewImageTitle(`غلاف سيت: ${activeSet.name}`);
+                      } else {
+                        setTargetSetForImage(activeSet);
+                        setCoverInputRef.current?.click();
+                      }
+                    });
+                  }}
+                  title="انقر لعرض أو تغيير صورة غلاف السيت"
+                />
+                <button
+                  onClick={() => {
+                    setTargetSetForImage(activeSet);
+                    setCoverInputRef.current?.click();
+                  }}
+                  className="absolute inset-0 bg-black/50 text-white opacity-0 group-hover/activesetimg:opacity-100 flex items-center justify-center transition-opacity cursor-pointer"
+                  title="تغيير صورة غلاف السيت"
+                >
+                  <Camera className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
               <div>
                 <div className="flex items-center gap-2">
                   <h2 className="text-base font-black text-slate-900">{activeSet.name}</h2>
@@ -757,6 +872,19 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
 
             {/* Actions for this specific set */}
             <div className="flex flex-wrap items-center gap-2 self-stretch md:self-auto justify-end">
+              {/* Set Cover Image Button */}
+              <button
+                onClick={() => {
+                  setTargetSetForImage(activeSet);
+                  setCoverInputRef.current?.click();
+                }}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-xs transition-colors cursor-pointer"
+                title="تغيير أو اختيار صورة الغلاف الرئيسية لهذا السيت"
+              >
+                <Camera className="w-4 h-4" />
+                <span>صورة غلاف السيت</span>
+              </button>
+
               {/* Checklist / Count Button */}
               <button
                 onClick={() => setShowChecklistModal(true)}
@@ -774,10 +902,10 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                   batchImageInputRef.current?.click();
                 }}
                 className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-xs transition-colors"
-                title="استيراد صور للأدوات داخل هذا السيت ومطابقتها بالكود"
+                title="استيراد صور للأدوات داخل هذا السيت ومطابقتها بأكواد الأدوات"
               >
                 <UploadCloud className="w-4 h-4" />
-                <span>استيراد صور السيت</span>
+                <span>استيراد صور أدوات السيت (بالكود)</span>
               </button>
 
               {/* Export ZIP of this set */}
@@ -806,6 +934,7 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                 <button
                   onClick={() => {
                     setEditingInst(null);
+                    setInstModalImageUrl(null);
                     setShowAddInstModal(true);
                   }}
                   className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-xs transition-colors"
@@ -896,33 +1025,51 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                       <tr key={inst.id} className="hover:bg-slate-50/80 transition-colors">
                         {/* Image Thumbnail */}
                         <td className="p-2 text-center">
-                          {inst.imageUrl ? (
-                            <button
+                          <div className="relative inline-block w-10 h-10 rounded-lg overflow-hidden border border-slate-200 shadow-2xs group align-middle">
+                            <SurgicalImage
+                              src={inst.imageUrl}
+                              code={inst.code}
+                              instrumentId={inst.id}
+                              alt={inst.name}
+                              className="w-full h-full object-cover cursor-pointer"
+                              containerClassName="w-full h-full flex items-center justify-center bg-slate-50"
+                              fallbackIcon={
+                                <button
+                                  onClick={() => {
+                                    setTargetInstForImage(inst);
+                                    singleImageInputRef.current?.click();
+                                  }}
+                                  className="w-full h-full text-slate-400 hover:text-blue-600 hover:bg-blue-50 flex items-center justify-center transition-colors border border-dashed border-slate-300"
+                                  title="إضافة صورة لهذه الأداة"
+                                >
+                                  <Camera className="w-4 h-4" />
+                                </button>
+                              }
                               onClick={() => {
-                                setPreviewImageUrl(inst.imageUrl!);
-                                setPreviewImageTitle(`${inst.code} - ${inst.name}`);
+                                resolveSurgicalImageUrl({ imageUrl: inst.imageUrl, code: inst.code, id: inst.id }).then((url) => {
+                                  if (url) {
+                                    setPreviewImageUrl(url);
+                                    setPreviewImageTitle(`${inst.code} - ${inst.name}`);
+                                  } else {
+                                    setTargetInstForImage(inst);
+                                    singleImageInputRef.current?.click();
+                                  }
+                                });
                               }}
-                              className="w-10 h-10 rounded-lg overflow-hidden border border-slate-200 shadow-2xs hover:scale-105 transition-transform inline-block group relative"
                               title="انقر لتكبير الصورة"
-                            >
-                              <img
-                                src={inst.imageUrl}
-                                alt={inst.name}
-                                className="w-full h-full object-cover"
-                              />
-                            </button>
-                          ) : (
+                            />
                             <button
-                              onClick={() => {
+                              onClick={(e) => {
+                                e.stopPropagation();
                                 setTargetInstForImage(inst);
                                 singleImageInputRef.current?.click();
                               }}
-                              className="w-10 h-10 rounded-lg bg-slate-100 text-slate-400 hover:text-blue-600 hover:bg-blue-50 flex items-center justify-center transition-colors border border-dashed border-slate-300"
-                              title="إضافة صورة لهذه الأداة"
+                              className="absolute inset-0 bg-black/50 text-white opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity cursor-pointer"
+                              title="تغيير أو رفع صورة جديدة"
                             >
-                              <Camera className="w-4 h-4" />
+                              <Camera className="w-3.5 h-3.5" />
                             </button>
-                          )}
+                          </div>
                         </td>
 
                         {/* Code */}
@@ -986,6 +1133,7 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                                 <button
                                   onClick={() => {
                                     setEditingInst(inst);
+                                    setInstModalImageUrl(inst.imageUrl || null);
                                     setShowAddInstModal(true);
                                   }}
                                   className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-700 transition-colors"
@@ -1025,29 +1173,51 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                 >
                   <div>
                     {/* Image Box */}
-                    <div className="aspect-square bg-slate-100 relative overflow-hidden flex items-center justify-center">
-                      {inst.imageUrl ? (
-                        <img
-                          src={inst.imageUrl}
-                          alt={inst.name}
-                          onClick={() => {
-                            setPreviewImageUrl(inst.imageUrl!);
-                            setPreviewImageTitle(`${inst.code} - ${inst.name}`);
-                          }}
-                          className="w-full h-full object-cover cursor-pointer group-hover:scale-105 transition-transform"
-                        />
-                      ) : (
-                        <div
-                          onClick={() => {
-                            setTargetInstForImage(inst);
-                            singleImageInputRef.current?.click();
-                          }}
-                          className="w-full h-full flex flex-col items-center justify-center text-slate-400 hover:text-blue-600 hover:bg-blue-50/50 cursor-pointer transition-colors p-2 text-center"
-                        >
-                          <Camera className="w-6 h-6 mb-1 opacity-60" />
-                          <span className="text-[10px] font-bold">رفع صورة</span>
-                        </div>
-                      )}
+                    <div className="aspect-square bg-slate-100 relative overflow-hidden flex items-center justify-center group/cardimg">
+                      <SurgicalImage
+                        src={inst.imageUrl}
+                        code={inst.code}
+                        instrumentId={inst.id}
+                        alt={inst.name}
+                        className="w-full h-full object-cover cursor-pointer group-hover/cardimg:scale-105 transition-transform"
+                        containerClassName="w-full h-full flex items-center justify-center"
+                        fallbackIcon={
+                          <div
+                            onClick={() => {
+                              setTargetInstForImage(inst);
+                              singleImageInputRef.current?.click();
+                            }}
+                            className="w-full h-full flex flex-col items-center justify-center text-slate-400 hover:text-blue-600 hover:bg-blue-50/50 cursor-pointer transition-colors p-2 text-center"
+                          >
+                            <Camera className="w-6 h-6 mb-1 opacity-60" />
+                            <span className="text-[10px] font-bold">رفع صورة</span>
+                          </div>
+                        }
+                        onClick={() => {
+                          resolveSurgicalImageUrl({ imageUrl: inst.imageUrl, code: inst.code, id: inst.id }).then((url) => {
+                            if (url) {
+                              setPreviewImageUrl(url);
+                              setPreviewImageTitle(`${inst.code} - ${inst.name}`);
+                            } else {
+                              setTargetInstForImage(inst);
+                              singleImageInputRef.current?.click();
+                            }
+                          });
+                        }}
+                        title="انقر لتكبير الصورة"
+                      />
+                      {/* Floating camera button to replace image on hover */}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setTargetInstForImage(inst);
+                          singleImageInputRef.current?.click();
+                        }}
+                        className="absolute bottom-2 left-2 p-1.5 rounded-lg bg-black/60 hover:bg-black/80 text-white opacity-0 group-hover/cardimg:opacity-100 transition-opacity cursor-pointer shadow-sm"
+                        title="تغيير صورة الأداة"
+                      >
+                        <Camera className="w-3.5 h-3.5" />
+                      </button>
 
                       {/* Code Badge Overlay */}
                       <span className="absolute top-2 right-2 font-mono text-[10px] font-bold bg-slate-900/80 text-white px-2 py-0.5 rounded-md backdrop-blur-xs">
@@ -1090,6 +1260,7 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                       <button
                         onClick={() => {
                           setEditingInst(inst);
+                          setInstModalImageUrl(inst.imageUrl || null);
                           setShowAddInstModal(true);
                         }}
                         className="text-slate-600 hover:text-slate-900 text-[10px]"
@@ -1431,7 +1602,7 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                   trayNumber,
                   status,
                   notes,
-                  imageUrl: editingSet?.imageUrl,
+                  imageUrl: setModalImageUrl ?? editingSet?.imageUrl,
                   instrumentsCount: editingSet?.instrumentsCount || 0,
                   createdAt: editingSet?.createdAt || new Date().toISOString(),
                   updatedAt: new Date().toISOString(),
@@ -1443,6 +1614,48 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
               }}
               className="space-y-3 text-xs"
             >
+              {/* Set Cover Image Field */}
+              <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200">
+                <label className="block font-bold text-slate-700 mb-2">صورة غلاف السيت (اختياري)</label>
+                <div className="flex items-center gap-3">
+                  <div className="w-16 h-16 rounded-xl border border-slate-200 overflow-hidden bg-white flex items-center justify-center shrink-0 shadow-2xs">
+                    {setModalImageUrl ? (
+                      <img src={setModalImageUrl} alt="غلاف السيت" className="w-full h-full object-cover" />
+                    ) : (
+                      <Layers className="w-6 h-6 text-slate-400" />
+                    )}
+                  </div>
+                  <div className="flex-1 space-y-1">
+                    <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white hover:bg-blue-50 text-slate-700 hover:text-blue-600 font-bold text-xs cursor-pointer border border-slate-200 shadow-2xs transition-colors">
+                      <Camera className="w-3.5 h-3.5 text-blue-600" />
+                      <span>{setModalImageUrl ? 'تغيير صورة الغلاف' : 'اختيار صورة من جهازك'}</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={async (e) => {
+                          const f = e.target.files?.[0];
+                          if (f) {
+                            const b64 = await SurgicalService.fileToBase64(f);
+                            setSetModalImageUrl(b64);
+                          }
+                        }}
+                      />
+                    </label>
+                    {setModalImageUrl && (
+                      <button
+                        type="button"
+                        onClick={() => setSetModalImageUrl(null)}
+                        className="text-[11px] text-rose-600 font-bold block hover:underline"
+                      >
+                        إزالة الصورة
+                      </button>
+                    )}
+                    <p className="text-[10px] text-slate-400">ستظهر كصورة رئيسية للسيت في قائمة الأطقم وبطاقة العمليات.</p>
+                  </div>
+                </div>
+              </div>
+
               <div>
                 <label className="block font-bold text-slate-700 mb-1">اسم السيت الجراحي *</label>
                 <input
@@ -1597,7 +1810,7 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                   actualQuantity,
                   status,
                   notes,
-                  imageUrl: editingInst?.imageUrl,
+                  imageUrl: instModalImageUrl ?? editingInst?.imageUrl,
                   updatedAt: new Date().toISOString(),
                 };
 
@@ -1607,6 +1820,47 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
               }}
               className="space-y-3 text-xs"
             >
+              {/* Instrument Image Field */}
+              <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200">
+                <label className="block font-bold text-slate-700 mb-2">صورة الأداة (اختياري)</label>
+                <div className="flex items-center gap-3">
+                  <div className="w-14 h-14 rounded-xl border border-slate-200 overflow-hidden bg-white flex items-center justify-center shrink-0 shadow-2xs">
+                    {instModalImageUrl ? (
+                      <img src={instModalImageUrl} alt="صورة الأداة" className="w-full h-full object-cover" />
+                    ) : (
+                      <Scissors className="w-6 h-6 text-slate-400" />
+                    )}
+                  </div>
+                  <div className="flex-1 space-y-1">
+                    <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white hover:bg-blue-50 text-slate-700 hover:text-blue-600 font-bold text-xs cursor-pointer border border-slate-200 shadow-2xs transition-colors">
+                      <Camera className="w-3.5 h-3.5 text-blue-600" />
+                      <span>{instModalImageUrl ? 'تغيير الصورة' : 'اختيار صورة من جهازك'}</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={async (e) => {
+                          const f = e.target.files?.[0];
+                          if (f) {
+                            const b64 = await SurgicalService.fileToBase64(f);
+                            setInstModalImageUrl(b64);
+                          }
+                        }}
+                      />
+                    </label>
+                    {instModalImageUrl && (
+                      <button
+                        type="button"
+                        onClick={() => setInstModalImageUrl(null)}
+                        className="text-[11px] text-rose-600 font-bold block hover:underline"
+                      >
+                        إزالة الصورة
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block font-bold text-slate-700 mb-1">كود الأداة *</label>

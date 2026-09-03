@@ -85,6 +85,15 @@ export class SurgicalService {
     const sets = this.getSets();
     const index = sets.findIndex((s) => s.id === set.id);
     set.updatedAt = new Date().toISOString();
+
+    // If image is a base64 data URI, store in IndexedDB and replace with lightweight reference
+    if (set.imageUrl && set.imageUrl.startsWith('data:')) {
+      saveImageToDB(`set_${set.id}`, set.imageUrl);
+      saveImageToDB(`set_code_${set.code}`, set.imageUrl);
+      if (set.code) saveImageToDB(set.code, set.imageUrl);
+      set.imageUrl = `idb://set_${set.id}`;
+    }
+
     if (index >= 0) {
       sets[index] = set;
     } else {
@@ -141,6 +150,15 @@ export class SurgicalService {
     const instruments = this.getInstruments();
     const index = instruments.findIndex((i) => i.id === instrument.id);
     instrument.updatedAt = new Date().toISOString();
+
+    // If image is a base64 data URI, store in IndexedDB and replace with lightweight reference
+    if (instrument.imageUrl && instrument.imageUrl.startsWith('data:')) {
+      saveImageToDB(`inst_${instrument.id}`, instrument.imageUrl);
+      saveImageToDB(`code_${instrument.code}`, instrument.imageUrl);
+      saveImageToDB(instrument.code, instrument.imageUrl);
+      instrument.imageUrl = `idb://${instrument.code}`;
+    }
+
     if (index >= 0) {
       instruments[index] = instrument;
     } else {
@@ -148,6 +166,39 @@ export class SurgicalService {
     }
     this.saveInstruments(instruments);
     FirestoreSyncService.syncSurgicalInstrument(instrument);
+  }
+
+  /**
+   * Scans instruments for missing image references and recovers them if present in IndexedDB
+   */
+  static async syncAndRecoverInstrumentImages(): Promise<number> {
+    const instruments = this.getInstruments();
+    let recoveredCount = 0;
+    let changed = false;
+
+    for (const inst of instruments) {
+      if (!inst.imageUrl || inst.imageUrl.trim() === '') {
+        const checkKeys = [`code_${inst.code}`, `inst_${inst.id}`, inst.code];
+        for (const k of checkKeys) {
+          try {
+            const dbData = await getImageFromDB(k);
+            if (dbData) {
+              inst.imageUrl = `idb://${inst.code}`;
+              recoveredCount++;
+              changed = true;
+              break;
+            }
+          } catch {
+            // continue
+          }
+        }
+      }
+    }
+
+    if (changed) {
+      this.saveInstruments(instruments);
+    }
+    return recoveredCount;
   }
 
   static deleteInstrument(id: string): void {
@@ -423,12 +474,13 @@ export class SurgicalService {
       if (matchedInst) {
         try {
           const base64Data = await this.fileToBase64(file);
-          // Save to IndexedDB
+          // Save to IndexedDB under multiple keys
           await saveImageToDB(`inst_${matchedInst.id}`, base64Data);
           await saveImageToDB(`code_${matchedInst.code}`, base64Data);
+          await saveImageToDB(matchedInst.code, base64Data);
 
-          // Update instrument record
-          matchedInst.imageUrl = base64Data;
+          // Update instrument record with lightweight reference
+          matchedInst.imageUrl = `idb://${matchedInst.code}`;
           matchedInst.updatedAt = new Date().toISOString();
           this.saveInstrument(matchedInst);
 
@@ -453,13 +505,80 @@ export class SurgicalService {
           unmatchedCount++;
         }
       } else {
-        results.push({
-          fileName: file.name,
-          detectedCode,
-          success: false,
-          error: `لم يتم العثور على أداة بالكود: ${detectedCode || file.name}`,
-        });
-        unmatchedCount++;
+        // Check if image matches a surgical set (by code or name)
+        let matchedSet: SurgicalSet | undefined;
+        if (targetSetId) {
+          const targetSet = allSets.find((s) => s.id === targetSetId);
+          if (targetSet) {
+            const rawNorm = normalizeInstrumentCode(file.name);
+            const setCodeNorm = normalizeInstrumentCode(targetSet.code);
+            const setNameNorm = normalizeInstrumentCode(targetSet.name);
+            if (
+              (setCodeNorm && rawNorm.includes(setCodeNorm)) ||
+              (setNameNorm && rawNorm.includes(setNameNorm)) ||
+              rawNorm.includes('cover') ||
+              rawNorm.includes('غلاف') ||
+              rawNorm.includes('set')
+            ) {
+              matchedSet = targetSet;
+            }
+          }
+        }
+
+        if (!matchedSet) {
+          for (const s of allSets) {
+            const setCodeNorm = normalizeInstrumentCode(s.code);
+            const setNameNorm = normalizeInstrumentCode(s.name);
+            const rawNorm = normalizeInstrumentCode(file.name);
+            if (
+              (setCodeNorm && rawNorm === setCodeNorm) ||
+              (setNameNorm && rawNorm === setNameNorm) ||
+              (setCodeNorm && rawNorm.includes(setCodeNorm))
+            ) {
+              matchedSet = s;
+              break;
+            }
+          }
+        }
+
+        if (matchedSet) {
+          try {
+            const base64Data = await this.fileToBase64(file);
+            await saveImageToDB(`set_${matchedSet.id}`, base64Data);
+            await saveImageToDB(`set_code_${matchedSet.code}`, base64Data);
+            if (matchedSet.code) await saveImageToDB(matchedSet.code, base64Data);
+
+            matchedSet.imageUrl = `idb://set_${matchedSet.id}`;
+            matchedSet.updatedAt = new Date().toISOString();
+            this.saveSet(matchedSet);
+
+            results.push({
+              fileName: file.name,
+              detectedCode: matchedSet.code,
+              matchedInstrumentName: `غلاف سيت: ${matchedSet.name}`,
+              matchedSetName: matchedSet.name,
+              success: true,
+            });
+            matchedCount++;
+          } catch (err: any) {
+            results.push({
+              fileName: file.name,
+              detectedCode: matchedSet.code,
+              matchedInstrumentName: `غلاف سيت: ${matchedSet.name}`,
+              success: false,
+              error: err?.message || 'فشل حفظ صورة غلاف السيت',
+            });
+            unmatchedCount++;
+          }
+        } else {
+          results.push({
+            fileName: file.name,
+            detectedCode,
+            success: false,
+            error: `لم يتم العثور على أداة أو سيت بالكود: ${detectedCode || file.name}`,
+          });
+          unmatchedCount++;
+        }
       }
     }
 
@@ -484,8 +603,13 @@ export class SurgicalService {
 
     for (const inst of instruments) {
       let dataUrl = inst.imageUrl;
-      if (!dataUrl) {
-        dataUrl = (await getImageFromDB(`inst_${inst.id}`)) || (await getImageFromDB(`code_${inst.code}`)) || undefined;
+      if (!dataUrl || dataUrl.startsWith('idb://')) {
+        dataUrl =
+          (await getImageFromDB(`inst_${inst.id}`)) ||
+          (await getImageFromDB(`code_${inst.code}`)) ||
+          (await getImageFromDB(inst.code)) ||
+          (inst.imageUrl ? await getImageFromDB(inst.imageUrl.replace('idb://', '')) : null) ||
+          undefined;
       }
 
       if (dataUrl && dataUrl.startsWith('data:image/')) {
