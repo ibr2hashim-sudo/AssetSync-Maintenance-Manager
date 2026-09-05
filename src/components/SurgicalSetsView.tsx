@@ -56,6 +56,10 @@ interface SurgicalSetsViewProps {
 export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
   currentUser,
 }) => {
+  const isAdmin = currentUser?.role === 'admin';
+  const isTechnician = currentUser?.role === 'technician';
+  const canViewStats = isAdmin || isTechnician;
+
   const [sets, setSets] = useState<SurgicalSet[]>([]);
   const [instruments, setInstruments] = useState<SurgicalInstrument[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -158,10 +162,24 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
 
   // Summary Metrics
   const metrics = useMemo(() => {
+    // دالة مساعدة لضمان قراءة الأرقام الحسابية وتفادي الدمج النصي في متصفحات الجوال
+    const parseSafeQty = (val: any): number => {
+      if (val === null || val === undefined || val === '') return 0;
+      if (typeof val === 'number') return isNaN(val) ? 0 : Math.round(val);
+      const cleaned = String(val).replace(/[^0-9.-]/g, '').trim();
+      const parsed = parseInt(cleaned, 10);
+      return isNaN(parsed) ? 0 : parsed;
+    };
+
     const totalSets = sets.length;
     const totalInstItems = instruments.length; // Distinct instrument rows
-    const totalQuantity = instruments.reduce((sum, i) => sum + (i.quantity || 0), 0);
-    const totalActualQuantity = instruments.reduce((sum, i) => sum + (i.actualQuantity ?? i.quantity ?? 0), 0);
+    
+    // رابعاً وخامساً: مجموع القطع بحصرها من الكمية الفعلية للقطع فقط (العمود "الكمية") كأرقام حسابية ناصعة
+    const totalQuantity = instruments.reduce((sum, i) => sum + parseSafeQty(i.quantity), 0);
+    const totalActualQuantity = instruments.reduce((sum, i) => {
+      const hasActual = i.actualQuantity !== undefined && i.actualQuantity !== null && i.actualQuantity !== '';
+      return sum + (hasActual ? parseSafeQty(i.actualQuantity) : parseSafeQty(i.quantity));
+    }, 0);
     const totalVariance = totalActualQuantity - totalQuantity;
     const totalImagesCount = instruments.filter((i) => !!i.imageUrl).length;
 
@@ -181,8 +199,9 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
     instruments.forEach((inst) => {
       const cleanName = (inst.name || 'بدون اسم').trim();
       const lower = cleanName.toLowerCase();
-      const stdQty = inst.quantity || 0;
-      const actQty = inst.actualQuantity ?? inst.quantity ?? 0;
+      const stdQty = parseSafeQty(inst.quantity);
+      const hasActual = inst.actualQuantity !== undefined && inst.actualQuantity !== null && inst.actualQuantity !== '';
+      const actQty = hasActual ? parseSafeQty(inst.actualQuantity) : stdQty;
 
       if (!map.has(lower)) {
         map.set(lower, {
@@ -209,7 +228,10 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
       });
     });
 
-    const aggregatedList = Array.from(map.values()).sort((a, b) => b.totalStdQty - a.totalStdQty);
+    // ثانياً: ترتيب إحصائية الأدوات أبجدياً حسب اسم الأداة
+    const aggregatedList = Array.from(map.values()).sort((a, b) =>
+      a.name.localeCompare(b.name, 'ar', { sensitivity: 'base' })
+    );
     const totalUniqueTypes = aggregatedList.length;
 
     return {
@@ -577,25 +599,29 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
             <span>{isExportingZip ? 'جارِ الضغط...' : 'تصدير الصور (ZIP)'}</span>
           </button>
 
-          {/* Instrument Aggregated Stats Button */}
-          <button
-            onClick={() => setShowStatsModal(true)}
-            className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-white text-xs font-bold shadow-md shadow-amber-500/25 transition-all cursor-pointer"
-            title="عرض إحصائية تفصيلية لكافة الأصناف وكمياتها المجمعة عبر جميع السيتات"
-          >
-            <BarChart3 className="w-4 h-4" />
-            <span>احصائية للادوات</span>
-          </button>
+          {/* Instrument Aggregated Stats Button (Admin & Technicians only) */}
+          {canViewStats && (
+            <button
+              onClick={() => setShowStatsModal(true)}
+              className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-white text-xs font-bold shadow-md shadow-amber-500/25 transition-all cursor-pointer"
+              title="عرض إحصائية تفصيلية لكافة الأصناف وكمياتها المجمعة عبر جميع السيتات"
+            >
+              <BarChart3 className="w-4 h-4" />
+              <span>احصائية للادوات</span>
+            </button>
+          )}
 
-          {/* Export All Sets Excel */}
-          <button
-            onClick={() => SurgicalService.exportAllSetsToExcel()}
-            className="flex items-center gap-1.5 px-3 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold shadow-sm transition-all cursor-pointer"
-            title="تصدير سجل كامل لكافة السيتات والأدوات إلى Excel"
-          >
-            <Download className="w-4 h-4 text-blue-400" />
-            <span>تصدير الكل (Excel)</span>
-          </button>
+          {/* Export All Sets Excel (Admin only) */}
+          {isAdmin && (
+            <button
+              onClick={() => SurgicalService.exportAllSetsToExcel()}
+              className="flex items-center gap-1.5 px-3 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold shadow-sm transition-all cursor-pointer"
+              title="تصدير سجل كامل لكافة السيتات والأدوات إلى Excel"
+            >
+              <Download className="w-4 h-4 text-blue-400" />
+              <span>تصدير الكل (Excel)</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -635,13 +661,15 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
               </div>
             </div>
           </div>
-          <button
-            onClick={() => setShowStatsModal(true)}
-            className="text-[11px] font-bold text-indigo-600 hover:text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-2 py-1 rounded-md border border-indigo-100 transition-colors cursor-pointer"
-            title="فتح احصائية للادوات"
-          >
-            تفاصيل
-          </button>
+          {canViewStats && (
+            <button
+              onClick={() => setShowStatsModal(true)}
+              className="text-[11px] font-bold text-indigo-600 hover:text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-2 py-1 rounded-md border border-indigo-100 transition-colors cursor-pointer"
+              title="فتح احصائية للادوات"
+            >
+              تفاصيل
+            </button>
+          )}
         </div>
 
         {/* Total Actual / Physical Quantity */}
@@ -663,10 +691,12 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
           </span>
         </div>
 
-        {/* Variance Status & Direct Button to Stats */}
+        {/* Variance Status */}
         <div
-          onClick={() => setShowStatsModal(true)}
-          className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs flex items-center justify-between cursor-pointer hover:border-amber-300 hover:shadow-sm transition-all group"
+          onClick={canViewStats ? () => setShowStatsModal(true) : undefined}
+          className={`bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs flex items-center justify-between transition-all ${
+            canViewStats ? 'cursor-pointer hover:border-amber-300 hover:shadow-sm group' : ''
+          }`}
         >
           <div className="flex items-center gap-3">
             <div
@@ -692,18 +722,20 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                   }`}
                 >
                   {metrics.totalVariance === 0
-                    ? '0 (مطابق)'
-                    : metrics.totalVariance < 0
-                    ? `${metrics.totalVariance} عجز`
-                    : `+${metrics.totalVariance} زيادة`}
+                    ? '0'
+                    : metrics.totalVariance > 0
+                    ? `+${metrics.totalVariance}`
+                    : `${metrics.totalVariance}`}
                 </span>
               </div>
               <div className="text-xs text-slate-500 font-medium">
-                الفارق الإجمالي • <span className="text-amber-600 group-hover:underline font-bold">احصائية للادوات</span>
+                الفارق الإجمالي {canViewStats && <>• <span className="text-amber-600 group-hover:underline font-bold">احصائية للادوات</span></>}
               </div>
             </div>
           </div>
-          <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-amber-600 group-hover:-translate-x-1 transition-all" />
+          {canViewStats && (
+            <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-amber-600 group-hover:-translate-x-1 transition-all" />
+          )}
         </div>
       </div>
 
@@ -2339,9 +2371,9 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
       )}
 
       {/* ========================================================================= */}
-      {/* MODAL: احصائية للادوات (Aggregated Instrument Statistics Modal) */}
+      {/* MODAL: احصائية للادوات (Aggregated Instrument Statistics Modal - Admin & Tech only) */}
       {/* ========================================================================= */}
-      {showStatsModal && (
+      {showStatsModal && canViewStats && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in duration-150">
           <div className="bg-white rounded-3xl max-w-5xl w-full p-6 shadow-2xl border border-slate-100 max-h-[92vh] flex flex-col space-y-4">
             {/* Header */}
@@ -2405,10 +2437,10 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                 <div className="text-[11px] font-bold">الفارق الإجمالي العام</div>
                 <div className="text-lg font-black font-mono mt-0.5">
                   {metrics.totalVariance === 0
-                    ? '0 (مطابق بالكامل)'
-                    : metrics.totalVariance < 0
-                    ? `${metrics.totalVariance} قطعة عجز`
-                    : `+${metrics.totalVariance} قطعة زيادة`}
+                    ? '0'
+                    : metrics.totalVariance > 0
+                    ? `+${metrics.totalVariance}`
+                    : `${metrics.totalVariance}`}
                 </div>
               </div>
             </div>
@@ -2426,40 +2458,43 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                 />
               </div>
 
-              <button
-                type="button"
-                onClick={() => {
-                  try {
-                    const rows = metrics.aggregatedList.map((item, idx) => ({
-                      'م': idx + 1,
-                      'اسم الأداة / الصنف': item.name,
-                      'الكمية المعيارية الإجمالية': item.totalStdQty,
-                      'الكمية الفعلية الإجمالية': item.totalActQty,
-                      'الفارق':
-                        item.variance === 0
-                          ? '0 (مطابق)'
-                          : item.variance < 0
-                          ? `${item.variance} (نقص)`
-                          : `+${item.variance} (زيادة)`,
-                      'عدد السيتات المتواجد بها': item.sets.length,
-                      'توزيع السيتات': item.sets
-                        .map((s) => `${s.setName} (${s.actQty}/${s.stdQty})`)
-                        .join(' | '),
-                    }));
+              {/* تصدير الإحصائية - يظهر للادمن فقط */}
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    try {
+                      const rows = metrics.aggregatedList.map((item, idx) => ({
+                        'م': idx + 1,
+                        'اسم الأداة / الصنف': item.name,
+                        'الكمية المعيارية الإجمالية': item.totalStdQty,
+                        'الكمية الفعلية الإجمالية': item.totalActQty,
+                        'الفارق':
+                          item.variance === 0
+                            ? 0
+                            : item.variance > 0
+                            ? `+${item.variance}`
+                            : item.variance,
+                        'عدد السيتات المتواجد بها': item.sets.length,
+                        'توزيع السيتات': item.sets
+                          .map((s) => `${s.setName} (${s.actQty}/${s.stdQty})`)
+                          .join(' | '),
+                      }));
 
-                    const worksheet = XLSX.utils.json_to_sheet(rows);
-                    const workbook = XLSX.utils.book_new();
-                    XLSX.utils.book_append_sheet(workbook, worksheet, 'احصائية الادوات');
-                    XLSX.writeFile(workbook, `احصائية_الادوات_الجراحية_${new Date().toISOString().split('T')[0]}.xlsx`);
-                  } catch (err: any) {
-                    alert(`فشل تصدير الكشف: ${err?.message || ''}`);
-                  }
-                }}
-                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-xs transition-colors cursor-pointer w-full sm:w-auto justify-center"
-              >
-                <FileSpreadsheet className="w-4 h-4" />
-                <span>تصدير الإحصائية إلى Excel</span>
-              </button>
+                      const worksheet = XLSX.utils.json_to_sheet(rows);
+                      const workbook = XLSX.utils.book_new();
+                      XLSX.utils.book_append_sheet(workbook, worksheet, 'احصائية الادوات');
+                      XLSX.writeFile(workbook, `احصائية_الادوات_الجراحية_${new Date().toISOString().split('T')[0]}.xlsx`);
+                    } catch (err: any) {
+                      alert(`فشل تصدير الكشف: ${err?.message || ''}`);
+                    }
+                  }}
+                  className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-xs transition-colors cursor-pointer w-full sm:w-auto justify-center"
+                >
+                  <FileSpreadsheet className="w-4 h-4" />
+                  <span>تصدير الإحصائية إلى Excel</span>
+                </button>
+              )}
             </div>
 
             {/* Aggregated Table */}
@@ -2520,7 +2555,7 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                           </td>
                           <td className="py-3 px-3 text-center">
                             <span
-                              className={`font-mono font-black text-xs px-2 py-0.5 rounded-full border inline-block ${
+                              className={`font-mono font-black text-xs px-2.5 py-1 rounded-full border inline-block ${
                                 item.variance === 0
                                   ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                                   : item.variance < 0
@@ -2529,10 +2564,10 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                               }`}
                             >
                               {item.variance === 0
-                                ? '0 مطابق'
-                                : item.variance < 0
-                                ? `${item.variance} نقص`
-                                : `+${item.variance} زيادة`}
+                                ? '0'
+                                : item.variance > 0
+                                ? `+${item.variance}`
+                                : `${item.variance}`}
                             </span>
                           </td>
                           <td className="py-3 px-3">
