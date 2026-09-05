@@ -28,6 +28,7 @@ import {
   Building2,
   PackageCheck,
   FileDown,
+  BarChart3,
 } from 'lucide-react';
 import {
   SurgicalSet,
@@ -45,6 +46,7 @@ import { StorageService } from '../services/storage';
 import { SurgicalImage, resolveSurgicalImageUrl } from './SurgicalImage';
 import { SyncStatusBadge } from './SyncStatusBadge';
 import { FirestoreSyncService } from '../services/firestoreSync';
+import * as XLSX from 'xlsx';
 
 interface SurgicalSetsViewProps {
   currentUser: User | null;
@@ -73,6 +75,8 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
   const [showBatchImageModal, setShowBatchImageModal] = useState(false);
   const [batchImageTargetSetId, setBatchImageTargetSetId] = useState<string | undefined>(undefined);
   const [showChecklistModal, setShowChecklistModal] = useState(false);
+  const [showStatsModal, setShowStatsModal] = useState(false);
+  const [statsSearchTerm, setStatsSearchTerm] = useState('');
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
   const [previewImageTitle, setPreviewImageTitle] = useState<string>('');
   const [previewTarget, setPreviewTarget] = useState<{
@@ -155,23 +159,68 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
   // Summary Metrics
   const metrics = useMemo(() => {
     const totalSets = sets.length;
-    const totalInsts = instruments.length;
-    const readySets = sets.filter((s) => s.status === 'جاهز للاستخدام').length;
-    const inSterilization = sets.filter((s) => s.status === 'قيد التعقيم').length;
-    const inOR = sets.filter((s) => s.status === 'في العمليات').length;
-    const needAttention = instruments.filter(
-      (i) => i.status === 'تالف' || i.status === 'مفقود' || i.status === 'يحتاج سن'
-    ).length;
+    const totalInstItems = instruments.length; // Distinct instrument rows
+    const totalQuantity = instruments.reduce((sum, i) => sum + (i.quantity || 0), 0);
+    const totalActualQuantity = instruments.reduce((sum, i) => sum + (i.actualQuantity ?? i.quantity ?? 0), 0);
+    const totalVariance = totalActualQuantity - totalQuantity;
     const totalImagesCount = instruments.filter((i) => !!i.imageUrl).length;
+
+    // Build grouped instruments map by normalized name
+    const map = new Map<
+      string,
+      {
+        name: string;
+        occurrences: number;
+        totalStdQty: number;
+        totalActQty: number;
+        variance: number;
+        sets: { setName: string; setCode: string; stdQty: number; actQty: number; status: string }[];
+      }
+    >();
+
+    instruments.forEach((inst) => {
+      const cleanName = (inst.name || 'بدون اسم').trim();
+      const lower = cleanName.toLowerCase();
+      const stdQty = inst.quantity || 0;
+      const actQty = inst.actualQuantity ?? inst.quantity ?? 0;
+
+      if (!map.has(lower)) {
+        map.set(lower, {
+          name: cleanName,
+          occurrences: 0,
+          totalStdQty: 0,
+          totalActQty: 0,
+          variance: 0,
+          sets: [],
+        });
+      }
+
+      const item = map.get(lower)!;
+      item.occurrences += 1;
+      item.totalStdQty += stdQty;
+      item.totalActQty += actQty;
+      item.variance = item.totalActQty - item.totalStdQty;
+      item.sets.push({
+        setName: inst.setName || 'سيت عام',
+        setCode: inst.setCode || '',
+        stdQty,
+        actQty,
+        status: inst.status || 'سليم',
+      });
+    });
+
+    const aggregatedList = Array.from(map.values()).sort((a, b) => b.totalStdQty - a.totalStdQty);
+    const totalUniqueTypes = aggregatedList.length;
 
     return {
       totalSets,
-      totalInsts,
-      readySets,
-      inSterilization,
-      inOR,
-      needAttention,
+      totalInstItems,
+      totalQuantity,
+      totalActualQuantity,
+      totalVariance,
+      totalUniqueTypes,
       totalImagesCount,
+      aggregatedList,
     };
   }, [sets, instruments]);
 
@@ -528,6 +577,16 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
             <span>{isExportingZip ? 'جارِ الضغط...' : 'تصدير الصور (ZIP)'}</span>
           </button>
 
+          {/* Instrument Aggregated Stats Button */}
+          <button
+            onClick={() => setShowStatsModal(true)}
+            className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-white text-xs font-bold shadow-md shadow-amber-500/25 transition-all cursor-pointer"
+            title="عرض إحصائية تفصيلية لكافة الأصناف وكمياتها المجمعة عبر جميع السيتات"
+          >
+            <BarChart3 className="w-4 h-4" />
+            <span>احصائية للادوات</span>
+          </button>
+
           {/* Export All Sets Excel */}
           <button
             onClick={() => SurgicalService.exportAllSetsToExcel()}
@@ -541,67 +600,110 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
       </div>
 
       {/* ========================================================================= */}
-      {/* METRICS ROW */}
+      {/* METRICS ROW (Clean & Focused on Inventory and Quantities) */}
       {/* ========================================================================= */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-        <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center font-bold">
-            <Layers className="w-5 h-5" />
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+        {/* Total Sets */}
+        <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center font-bold">
+              <Layers className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="text-xl font-black text-slate-900">{metrics.totalSets}</div>
+              <div className="text-xs text-slate-500 font-medium">إجمالي السيتات الجراحية</div>
+            </div>
           </div>
-          <div>
-            <div className="text-xl font-black text-slate-900">{metrics.totalSets}</div>
-            <div className="text-[11px] text-slate-500 font-medium">إجمالي السيتات</div>
-          </div>
+          <span className="text-[11px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-100">
+            سيت نشط
+          </span>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold">
-            <Scissors className="w-5 h-5" />
+        {/* Total Instruments with items & total pieces */}
+        <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold">
+              <Scissors className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-baseline gap-1.5">
+                <span className="text-xl font-black text-slate-900">{metrics.totalQuantity}</span>
+                <span className="text-xs text-slate-400 font-normal">قطعة</span>
+              </div>
+              <div className="text-xs text-slate-500 font-medium">
+                إجمالي الأدوات ({metrics.totalUniqueTypes} صنف مختلف)
+              </div>
+            </div>
           </div>
-          <div>
-            <div className="text-xl font-black text-slate-900">{metrics.totalInsts}</div>
-            <div className="text-[11px] text-slate-500 font-medium">إجمالي الأدوات</div>
-          </div>
+          <button
+            onClick={() => setShowStatsModal(true)}
+            className="text-[11px] font-bold text-indigo-600 hover:text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-2 py-1 rounded-md border border-indigo-100 transition-colors cursor-pointer"
+            title="فتح احصائية للادوات"
+          >
+            تفاصيل
+          </button>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold">
-            <CheckCircle2 className="w-5 h-5" />
+        {/* Total Actual / Physical Quantity */}
+        <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold">
+              <PackageCheck className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-baseline gap-1.5">
+                <span className="text-xl font-black text-slate-900">{metrics.totalActualQuantity}</span>
+                <span className="text-xs text-slate-400 font-normal">قطعة</span>
+              </div>
+              <div className="text-xs text-slate-500 font-medium">الكمية الدفترية / الفعلية</div>
+            </div>
           </div>
-          <div>
-            <div className="text-xl font-black text-slate-900">{metrics.readySets}</div>
-            <div className="text-[11px] text-slate-500 font-medium">سيتات جاهزة</div>
-          </div>
+          <span className="text-[11px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-100">
+            مجرودة
+          </span>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-cyan-50 text-cyan-600 flex items-center justify-center font-bold">
-            <RefreshCw className="w-5 h-5" />
+        {/* Variance Status & Direct Button to Stats */}
+        <div
+          onClick={() => setShowStatsModal(true)}
+          className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs flex items-center justify-between cursor-pointer hover:border-amber-300 hover:shadow-sm transition-all group"
+        >
+          <div className="flex items-center gap-3">
+            <div
+              className={`w-11 h-11 rounded-xl flex items-center justify-center font-bold ${
+                metrics.totalVariance === 0
+                  ? 'bg-emerald-50 text-emerald-600'
+                  : metrics.totalVariance < 0
+                  ? 'bg-rose-50 text-rose-600'
+                  : 'bg-blue-50 text-blue-600'
+              }`}
+            >
+              <BarChart3 className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span
+                  className={`text-xl font-black font-mono ${
+                    metrics.totalVariance === 0
+                      ? 'text-emerald-700'
+                      : metrics.totalVariance < 0
+                      ? 'text-rose-600'
+                      : 'text-blue-600'
+                  }`}
+                >
+                  {metrics.totalVariance === 0
+                    ? '0 (مطابق)'
+                    : metrics.totalVariance < 0
+                    ? `${metrics.totalVariance} عجز`
+                    : `+${metrics.totalVariance} زيادة`}
+                </span>
+              </div>
+              <div className="text-xs text-slate-500 font-medium">
+                الفارق الإجمالي • <span className="text-amber-600 group-hover:underline font-bold">احصائية للادوات</span>
+              </div>
+            </div>
           </div>
-          <div>
-            <div className="text-xl font-black text-slate-900">{metrics.inSterilization}</div>
-            <div className="text-[11px] text-slate-500 font-medium">قيد التعقيم</div>
-          </div>
-        </div>
-
-        <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center font-bold">
-            <Clock className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="text-xl font-black text-slate-900">{metrics.inOR}</div>
-            <div className="text-[11px] text-slate-500 font-medium">في العمليات</div>
-          </div>
-        </div>
-
-        <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center font-bold">
-            <AlertTriangle className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="text-xl font-black text-slate-900">{metrics.needAttention}</div>
-            <div className="text-[11px] text-slate-500 font-medium">أدوات تحتاج صيانة/سن</div>
-          </div>
+          <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-amber-600 group-hover:-translate-x-1 transition-all" />
         </div>
       </div>
 
@@ -2231,6 +2333,260 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                   إغلاق
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: احصائية للادوات (Aggregated Instrument Statistics Modal) */}
+      {/* ========================================================================= */}
+      {showStatsModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in duration-150">
+          <div className="bg-white rounded-3xl max-w-5xl w-full p-6 shadow-2xl border border-slate-100 max-h-[92vh] flex flex-col space-y-4">
+            {/* Header */}
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center font-bold">
+                  <BarChart3 className="w-6 h-6" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-lg font-black text-slate-900">احصائية للادوات</h3>
+                    <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-800">
+                      كشف شامل لجميع الأصناف في المستشفى
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    حصر مجمّع لكل صنف مع إجمالي الكمية المعيارية والفعلية ومقدار الفارق وأماكن تواجدها في السيتات
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setShowStatsModal(false);
+                  setStatsSearchTerm('');
+                }}
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Quick KPI Cards inside modal */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 shrink-0">
+              <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-3">
+                <div className="text-[11px] text-slate-500 font-bold">عدد الأصناف الفريدة</div>
+                <div className="text-lg font-black text-slate-900 mt-0.5">
+                  {metrics.totalUniqueTypes} <span className="text-xs font-normal text-slate-500">صنف</span>
+                </div>
+              </div>
+              <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-3">
+                <div className="text-[11px] text-slate-500 font-bold">إجمالي القطع المعيارية</div>
+                <div className="text-lg font-black text-slate-900 mt-0.5">
+                  {metrics.totalQuantity} <span className="text-xs font-normal text-slate-500">قطعة</span>
+                </div>
+              </div>
+              <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-3">
+                <div className="text-[11px] text-slate-500 font-bold">إجمالي القطع الفعلية</div>
+                <div className="text-lg font-black text-slate-900 mt-0.5">
+                  {metrics.totalActualQuantity} <span className="text-xs font-normal text-slate-500">قطعة</span>
+                </div>
+              </div>
+              <div
+                className={`border rounded-2xl p-3 ${
+                  metrics.totalVariance === 0
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                    : metrics.totalVariance < 0
+                    ? 'bg-rose-50 border-rose-200 text-rose-800'
+                    : 'bg-blue-50 border-blue-200 text-blue-800'
+                }`}
+              >
+                <div className="text-[11px] font-bold">الفارق الإجمالي العام</div>
+                <div className="text-lg font-black font-mono mt-0.5">
+                  {metrics.totalVariance === 0
+                    ? '0 (مطابق بالكامل)'
+                    : metrics.totalVariance < 0
+                    ? `${metrics.totalVariance} قطعة عجز`
+                    : `+${metrics.totalVariance} قطعة زيادة`}
+                </div>
+              </div>
+            </div>
+
+            {/* Toolbar: Search & Export */}
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 shrink-0">
+              <div className="relative w-full sm:w-80">
+                <Search className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={statsSearchTerm}
+                  onChange={(e) => setStatsSearchTerm(e.target.value)}
+                  placeholder="بحث باسم الصنف أو السيت..."
+                  className="w-full pl-3 pr-9 py-2 rounded-xl bg-slate-50 border border-slate-200 text-xs focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-500/20"
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  try {
+                    const rows = metrics.aggregatedList.map((item, idx) => ({
+                      'م': idx + 1,
+                      'اسم الأداة / الصنف': item.name,
+                      'الكمية المعيارية الإجمالية': item.totalStdQty,
+                      'الكمية الفعلية الإجمالية': item.totalActQty,
+                      'الفارق':
+                        item.variance === 0
+                          ? '0 (مطابق)'
+                          : item.variance < 0
+                          ? `${item.variance} (نقص)`
+                          : `+${item.variance} (زيادة)`,
+                      'عدد السيتات المتواجد بها': item.sets.length,
+                      'توزيع السيتات': item.sets
+                        .map((s) => `${s.setName} (${s.actQty}/${s.stdQty})`)
+                        .join(' | '),
+                    }));
+
+                    const worksheet = XLSX.utils.json_to_sheet(rows);
+                    const workbook = XLSX.utils.book_new();
+                    XLSX.utils.book_append_sheet(workbook, worksheet, 'احصائية الادوات');
+                    XLSX.writeFile(workbook, `احصائية_الادوات_الجراحية_${new Date().toISOString().split('T')[0]}.xlsx`);
+                  } catch (err: any) {
+                    alert(`فشل تصدير الكشف: ${err?.message || ''}`);
+                  }
+                }}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-xs transition-colors cursor-pointer w-full sm:w-auto justify-center"
+              >
+                <FileSpreadsheet className="w-4 h-4" />
+                <span>تصدير الإحصائية إلى Excel</span>
+              </button>
+            </div>
+
+            {/* Aggregated Table */}
+            <div className="flex-1 overflow-y-auto border border-slate-200/80 rounded-2xl bg-white shadow-inner">
+              <table className="w-full text-right text-xs">
+                <thead className="bg-slate-50 text-slate-700 sticky top-0 border-b border-slate-200 font-bold z-10">
+                  <tr>
+                    <th className="py-3 px-3 w-12 text-center">م</th>
+                    <th className="py-3 px-3">اسم الأداة / الصنف</th>
+                    <th className="py-3 px-3 text-center">معياري</th>
+                    <th className="py-3 px-3 text-center">فعلي</th>
+                    <th className="py-3 px-3 text-center">الفارق</th>
+                    <th className="py-3 px-3">موزعة في السيتات</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {(() => {
+                    const filtered = metrics.aggregatedList.filter((item) => {
+                      if (!statsSearchTerm.trim()) return true;
+                      const q = statsSearchTerm.toLowerCase();
+                      return (
+                        item.name.toLowerCase().includes(q) ||
+                        item.sets.some((s) => s.setName.toLowerCase().includes(q) || s.setCode.toLowerCase().includes(q))
+                      );
+                    });
+
+                    if (filtered.length === 0) {
+                      return (
+                        <tr>
+                          <td colSpan={6} className="py-12 text-center text-slate-400">
+                            لا توجد أدوات مطابقة لبحثك
+                          </td>
+                        </tr>
+                      );
+                    }
+
+                    return filtered.map((item, index) => {
+                      return (
+                        <tr key={item.name + index} className="hover:bg-slate-50/70 transition-colors">
+                          <td className="py-3 px-3 text-center font-mono text-slate-400 font-bold">
+                            {index + 1}
+                          </td>
+                          <td className="py-3 px-3">
+                            <div className="font-bold text-slate-900">{item.name}</div>
+                            <div className="text-[11px] text-slate-400 font-mono">
+                              موجودة في {item.sets.length} سيت جراحي
+                            </div>
+                          </td>
+                          <td className="py-3 px-3 text-center">
+                            <span className="font-black font-mono text-slate-900 text-sm">
+                              {item.totalStdQty}
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 text-center">
+                            <span className="font-black font-mono text-slate-900 text-sm">
+                              {item.totalActQty}
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 text-center">
+                            <span
+                              className={`font-mono font-black text-xs px-2 py-0.5 rounded-full border inline-block ${
+                                item.variance === 0
+                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                  : item.variance < 0
+                                  ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                  : 'bg-blue-50 text-blue-700 border-blue-200'
+                              }`}
+                            >
+                              {item.variance === 0
+                                ? '0 مطابق'
+                                : item.variance < 0
+                                ? `${item.variance} نقص`
+                                : `+${item.variance} زيادة`}
+                            </span>
+                          </td>
+                          <td className="py-3 px-3">
+                            <div className="flex flex-wrap gap-1.5 max-w-md">
+                              {item.sets.map((s, sIdx) => {
+                                const sDiff = s.actQty - s.stdQty;
+                                return (
+                                  <span
+                                    key={sIdx}
+                                    className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-slate-100 text-slate-700 text-[11px] border border-slate-200"
+                                  >
+                                    <span className="font-medium text-slate-800">{s.setName}</span>
+                                    <span className="font-mono text-[10px] text-slate-500 font-bold">
+                                      ({s.actQty}/{s.stdQty})
+                                    </span>
+                                    {sDiff !== 0 && (
+                                      <span
+                                        className={`font-mono font-black text-[9px] px-1 rounded ${
+                                          sDiff < 0
+                                            ? 'bg-rose-100 text-rose-700'
+                                            : 'bg-blue-100 text-blue-700'
+                                        }`}
+                                      >
+                                        {sDiff < 0 ? sDiff : `+${sDiff}`}
+                                      </span>
+                                    )}
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    });
+                  })()}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-between pt-2 border-t border-slate-100 shrink-0">
+              <div className="text-xs text-slate-500">
+                إجمالي الأصناف المعروضة: <strong>{metrics.aggregatedList.length}</strong> صنف عبر جميع السيتات
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowStatsModal(false);
+                  setStatsSearchTerm('');
+                }}
+                className="px-5 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold text-xs transition-colors cursor-pointer"
+              >
+                إغلاق
+              </button>
             </div>
           </div>
         </div>
