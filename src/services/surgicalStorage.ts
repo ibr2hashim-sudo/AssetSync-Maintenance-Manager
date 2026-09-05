@@ -236,7 +236,8 @@ export class SurgicalService {
             code: -1,
             instrumentName: -1,
             size: -1,
-            number: -1,
+            partNumber: -1,
+            quantity: -1,
             bookQuantity: -1,
             note: -1,
           };
@@ -246,7 +247,7 @@ export class SurgicalService {
             if (!row) continue;
             for (let c = 0; c < row.length; c++) {
               const val = String(row[c] || '').trim().toLowerCase();
-              if (val.includes('set name') || val.includes('اسم السيت') || val.includes('اسم الطقم')) {
+              if (val.includes('set name') || val.includes('اسم السيت') || val.includes('اسم الطقم') || val.includes('set') || val.includes('السيت')) {
                 colIndices.setName = c;
                 headerRowIndex = r;
               }
@@ -254,17 +255,31 @@ export class SurgicalService {
                 colIndices.code = c;
                 headerRowIndex = r;
               }
-              if (val.includes('instrument') || val.includes('اسم الاداة') || val.includes('اسم الأداة') || val.includes('أداة')) {
+              if (val.includes('instrument') || val.includes('اسم الاداة') || val.includes('اسم الأداة') || val.includes('أداة') || val.includes('اداة')) {
                 colIndices.instrumentName = c;
                 headerRowIndex = r;
               }
               if (val.includes('size') || val.includes('الحجم') || val.includes('المقاس') || val.includes('النوع')) {
                 colIndices.size = c;
               }
-              if (val.includes('number') || val.includes('الكمية') || val.includes('العدد')) {
-                if (colIndices.number === -1) colIndices.number = c;
+              // Part Number / Catalog Number (e.g. Number column in the excel)
+              if (val === 'number' || val.includes('part') || val.includes('catalog') || val.includes('رقم القطعة') || val.includes('الموديل')) {
+                colIndices.partNumber = c;
               }
-              if (val.includes('دفتر') || val.includes('فعلي') || val.includes('actual') || val.includes('book')) {
+              // Quantities (Standard / Required count) - explicit match on الكمية or qty/quantity or العدد
+              if (
+                val === 'qty' ||
+                val === 'quantity' ||
+                val === 'الكمية' ||
+                val === 'كمية' ||
+                val === 'العدد' ||
+                val.includes('الكمية المطلوبة') ||
+                val.includes('الكمية المعيارية')
+              ) {
+                colIndices.quantity = c;
+              }
+              // Book / Actual Quantity
+              if (val.includes('دفتر') || val.includes('فعلي') || val.includes('actual') || val.includes('book') || val.includes('الكمية الدفترية') || val.includes('الكمية الفعلية')) {
                 colIndices.bookQuantity = c;
               }
               if (val.includes('note') || val.includes('ملاحظ')) {
@@ -276,17 +291,28 @@ export class SurgicalService {
             }
           }
 
-          // Fallback column index defaults if header is standard
+          // Fallback column index defaults if header is standard (A=setName, B=code, C=instrumentName, D=size, E=partNumber, F=qty, G=bookQty, H=note)
           if (colIndices.setName === -1) colIndices.setName = 0;
           if (colIndices.code === -1) colIndices.code = 1;
           if (colIndices.instrumentName === -1) colIndices.instrumentName = 2;
           if (colIndices.size === -1) colIndices.size = 3;
-          if (colIndices.number === -1) colIndices.number = 4;
-          if (colIndices.bookQuantity === -1) colIndices.bookQuantity = 5;
-          if (colIndices.note === -1) colIndices.note = 6;
+          if (colIndices.partNumber === -1 && colIndices.quantity !== 4) colIndices.partNumber = 4;
+          if (colIndices.quantity === -1) colIndices.quantity = colIndices.partNumber === 4 ? 5 : 4;
+          if (colIndices.bookQuantity === -1) colIndices.bookQuantity = 6;
+          if (colIndices.note === -1) colIndices.note = 7;
 
           const existingSets = this.getSets();
           const existingInstruments = this.getInstruments();
+
+          // Helper to parse numbers supporting Eastern Arabic numerals (١، ٢، ٣)
+          const parseNumeric = (val: any): number => {
+            if (val === null || val === undefined) return 0;
+            let str = String(val).trim();
+            // Convert Eastern Arabic numerals to standard 0-9
+            str = str.replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
+            const parsed = parseFloat(str);
+            return isNaN(parsed) ? 0 : parsed;
+          };
 
           // Group by set name
           const setsMap = new Map<string, { set: SurgicalSet; instruments: SurgicalInstrument[] }>();
@@ -329,25 +355,53 @@ export class SurgicalService {
 
             const setEntry = setsMap.get(setKey)!;
             const sizeVal = colIndices.size !== -1 && row[colIndices.size] ? String(row[colIndices.size]).trim() : '';
-            const qtyVal = Number(row[colIndices.number]) || 1;
-            const actualQtyVal = Number(row[colIndices.bookQuantity]) || qtyVal;
+            const partNumVal = colIndices.partNumber !== -1 && row[colIndices.partNumber] ? String(row[colIndices.partNumber]).trim() : '';
+
+            // Quantity parsing: read standard expected quantity
+            let parsedQty = colIndices.quantity !== -1 ? parseNumeric(row[colIndices.quantity]) : 0;
+            if (parsedQty <= 0) {
+              parsedQty = 1;
+            }
+
+            // Book / Actual Quantity parsing
+            let parsedActualQty = colIndices.bookQuantity !== -1 ? parseNumeric(row[colIndices.bookQuantity]) : 0;
+            if (parsedActualQty <= 0) {
+              parsedActualQty = parsedQty; // Default to standard quantity if book quantity column is empty
+            }
+
+            // Combine size with part number if part number exists and is not already part of size
+            let finalSize = sizeVal;
+            if (partNumVal) {
+              if (finalSize && !finalSize.includes(partNumVal)) {
+                finalSize = `${finalSize} (${partNumVal})`;
+              } else if (!finalSize) {
+                finalSize = partNumVal;
+              }
+            }
+
             const notesVal = colIndices.note !== -1 && row[colIndices.note] ? String(row[colIndices.note]).trim() : '';
 
             const instCode = codeRaw || `INST-${setEntry.instruments.length + 1}`;
             const instName = instNameRaw || `أداة ${instCode}`;
 
+            // Check if there was an existing instrument with the same code in this set to preserve its photo
+            const previousInstrument = existingInstruments.find(
+              (oldInst) => oldInst.setId === setEntry.set.id && oldInst.code.toLowerCase() === instCode.toLowerCase()
+            );
+
             const instrumentItem: SurgicalInstrument = {
-              id: `inst-${setEntry.set.id}-${Date.now()}-${setEntry.instruments.length + 1}`,
+              id: previousInstrument?.id || `inst-${setEntry.set.id}-${Date.now()}-${setEntry.instruments.length + 1}`,
               setId: setEntry.set.id,
               setCode: setEntry.set.code,
               setName: setEntry.set.name,
               code: instCode,
               name: instName,
-              size: sizeVal,
-              quantity: qtyVal,
-              actualQuantity: actualQtyVal,
+              size: finalSize,
+              quantity: parsedQty,
+              actualQuantity: parsedActualQty,
               status: 'سليم',
               notes: notesVal,
+              imageUrl: previousInstrument?.imageUrl, // Safely preserve photo if existed
               updatedAt: new Date().toISOString(),
             };
 
@@ -652,15 +706,21 @@ export class SurgicalService {
     if (!targetSet) return;
     const instruments = this.getInstruments(setId);
 
-    const rows = instruments.map((inst) => ({
-      'Set Name': targetSet.name,
-      'Cod-': inst.code,
-      'Instrument Name': inst.name,
-      'Size': inst.size || '',
-      'Number': inst.quantity,
-      'الكمية الدفترية': inst.actualQuantity ?? inst.quantity,
-      'Note': inst.notes || (inst.status !== 'سليم' ? inst.status : ''),
-    }));
+    const rows = instruments.map((inst) => {
+      const actual = inst.actualQuantity ?? inst.quantity;
+      const variance = actual - inst.quantity;
+      return {
+        'Set Name': targetSet.name,
+        'Cod-': inst.code,
+        'Instrument Name': inst.name,
+        'Size': inst.size || '',
+        'الكمية المعيارية': inst.quantity,
+        'الكمية الدفترية': actual,
+        'الفارق': variance === 0 ? '0 (مطابق)' : variance < 0 ? `${variance} (نقص)` : `+${variance} (زيادة)`,
+        'الحالة': inst.status,
+        'Note': inst.notes || (inst.status !== 'سليم' ? inst.status : ''),
+      };
+    });
 
     const worksheet = XLSX.utils.json_to_sheet(rows);
     const workbook = XLSX.utils.book_new();
@@ -676,13 +736,16 @@ export class SurgicalService {
 
     const rows = allInstruments.map((inst) => {
       const parentSet = sets.find((s) => s.id === inst.setId);
+      const actual = inst.actualQuantity ?? inst.quantity;
+      const variance = actual - inst.quantity;
       return {
         'Set Name': parentSet?.name || inst.setName || 'سيت عام',
         'Cod-': inst.code,
         'Instrument Name': inst.name,
         'Size': inst.size || '',
-        'Number': inst.quantity,
-        'الكمية الدفترية': inst.actualQuantity ?? inst.quantity,
+        'الكمية المعيارية': inst.quantity,
+        'الكمية الدفترية': actual,
+        'الفارق': variance === 0 ? '0 (مطابق)' : variance < 0 ? `${variance} (نقص)` : `+${variance} (زيادة)`,
         'الحالة': inst.status,
         'Note': inst.notes || '',
       };

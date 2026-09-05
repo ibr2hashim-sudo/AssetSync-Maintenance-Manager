@@ -894,9 +894,35 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                     }}
                   />
                 </div>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  {activeSet.department} {activeSet.subLocation ? `• ${activeSet.subLocation}` : ''} • إجمالي الأدوات: {activeSetInstruments.length} أداة
-                </p>
+                <div className="flex items-center gap-3 text-xs text-slate-500 mt-1 flex-wrap">
+                  <span>{activeSet.department} {activeSet.subLocation ? `• ${activeSet.subLocation}` : ''}</span>
+                  <span>•</span>
+                  <span>الأدوات: <strong className="text-slate-900">{activeSetInstruments.length}</strong></span>
+                  {(() => {
+                    const totalStd = activeSetInstruments.reduce((acc, curr) => acc + (curr.quantity || 0), 0);
+                    const totalAct = activeSetInstruments.reduce((acc, curr) => acc + (curr.actualQuantity ?? curr.quantity ?? 0), 0);
+                    const totalDiff = totalAct - totalStd;
+                    return (
+                      <>
+                        <span>•</span>
+                        <span>معياري: <strong className="text-slate-900">{totalStd}</strong></span>
+                        <span>•</span>
+                        <span>فعلي: <strong className="text-slate-900">{totalAct}</strong></span>
+                        <span
+                          className={`font-mono font-bold px-2 py-0.5 rounded-full text-[10px] border ${
+                            totalDiff === 0
+                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                              : totalDiff < 0
+                              ? 'bg-rose-50 text-rose-700 border-rose-200'
+                              : 'bg-blue-50 text-blue-700 border-blue-200'
+                          }`}
+                        >
+                          الفارق الإجمالي: {totalDiff === 0 ? '0 (مكتمل ومطابق)' : totalDiff < 0 ? `${totalDiff} (عجز / نقص)` : `+${totalDiff} (زيادة)`}
+                        </span>
+                      </>
+                    );
+                  })()}
+                </div>
               </div>
             </div>
 
@@ -1043,8 +1069,9 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                       <th className="p-3 w-24">كود الأداة</th>
                       <th className="p-3">اسم الأداة الجراحية</th>
                       <th className="p-3 w-32">النوع / المقاس</th>
-                      <th className="p-3 w-20 text-center">الكمية</th>
-                      <th className="p-3 w-20 text-center">الدفترية</th>
+                      <th className="p-3 w-20 text-center">الكمية المعيارية</th>
+                      <th className="p-3 w-20 text-center">الدفترية / الفعلية</th>
+                      <th className="p-3 w-20 text-center">الفارق</th>
                       <th className="p-3 w-28 text-center">الحالة</th>
                       <th className="p-3">ملاحظات</th>
                       <th className="p-3 w-28 text-center">إجراءات</th>
@@ -1108,6 +1135,33 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                         {/* Actual Quantity */}
                         <td className="p-3 whitespace-nowrap text-center font-mono font-bold text-slate-700">
                           {inst.actualQuantity ?? inst.quantity}
+                        </td>
+
+                        {/* Variance / الفارق */}
+                        <td className="p-3 whitespace-nowrap text-center">
+                          {(() => {
+                            const act = inst.actualQuantity ?? inst.quantity;
+                            const diff = act - inst.quantity;
+                            if (diff === 0) {
+                              return (
+                                <span className="inline-flex items-center gap-1 font-mono font-bold px-2 py-0.5 rounded-full text-[11px] bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                  0 مطابق
+                                </span>
+                              );
+                            } else if (diff < 0) {
+                              return (
+                                <span className="inline-flex items-center gap-1 font-mono font-bold px-2 py-0.5 rounded-full text-[11px] bg-rose-50 text-rose-700 border border-rose-200">
+                                  {diff} نقص
+                                </span>
+                              );
+                            } else {
+                              return (
+                                <span className="inline-flex items-center gap-1 font-mono font-bold px-2 py-0.5 rounded-full text-[11px] bg-blue-50 text-blue-700 border border-blue-200">
+                                  +{diff} زيادة
+                                </span>
+                              );
+                            }
+                          })()}
                         </td>
 
                         {/* Status */}
@@ -1228,10 +1282,11 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                       <h4 className="font-bold text-slate-900 text-xs truncate" title={inst.name}>
                         {inst.name}
                       </h4>
-                      <p className="text-[10px] text-slate-500 font-medium">
-                        {inst.size ? `المقاس: ${inst.size}` : 'مقاس قياسي'} • العدد: {inst.quantity}
-                      </p>
-                      <div className="pt-1">
+                      <div className="flex items-center justify-between gap-1 text-[10px] text-slate-500 font-medium">
+                        <span className="truncate">{inst.size ? `المقاس: ${inst.size}` : 'مقاس قياسي'}</span>
+                        <span className="font-mono font-bold text-slate-800 shrink-0">معياري: {inst.quantity}</span>
+                      </div>
+                      <div className="pt-1 flex items-center justify-between gap-1">
                         <span
                           className={`inline-block text-[9px] font-bold px-2 py-0.5 rounded-md border ${getInstStatusBadge(
                             inst.status
@@ -1239,6 +1294,29 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                         >
                           {inst.status}
                         </span>
+                        {(() => {
+                          const act = inst.actualQuantity ?? inst.quantity;
+                          const diff = act - inst.quantity;
+                          if (diff === 0) {
+                            return (
+                              <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                مطابق ({act})
+                              </span>
+                            );
+                          } else if (diff < 0) {
+                            return (
+                              <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200">
+                                نقص {diff} ({act})
+                              </span>
+                            );
+                          } else {
+                            return (
+                              <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">
+                                +{diff} زيادة ({act})
+                              </span>
+                            );
+                          }
+                        })()}
                       </div>
                     </div>
                   </div>
@@ -1482,6 +1560,7 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                     <th className="p-3 w-24">المقاس</th>
                     <th className="p-3 w-20 text-center">الكمية القياسية</th>
                     <th className="p-3 w-24 text-center">الكمية الفعلية</th>
+                    <th className="p-3 w-20 text-center">الفارق</th>
                     <th className="p-3 w-32 text-center">حالة الأداة</th>
                   </tr>
                 </thead>
@@ -1504,6 +1583,31 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                           }}
                           className="w-16 text-center py-1 px-1.5 rounded-lg border border-slate-300 font-mono font-bold text-xs"
                         />
+                      </td>
+                      <td className="p-3 text-center whitespace-nowrap">
+                        {(() => {
+                          const act = inst.actualQuantity ?? inst.quantity;
+                          const diff = act - inst.quantity;
+                          if (diff === 0) {
+                            return (
+                              <span className="inline-flex font-mono font-bold px-2 py-0.5 rounded-full text-[11px] bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                0 مطابق
+                              </span>
+                            );
+                          } else if (diff < 0) {
+                            return (
+                              <span className="inline-flex font-mono font-bold px-2 py-0.5 rounded-full text-[11px] bg-rose-50 text-rose-700 border border-rose-200">
+                                {diff} نقص
+                              </span>
+                            );
+                          } else {
+                            return (
+                              <span className="inline-flex font-mono font-bold px-2 py-0.5 rounded-full text-[11px] bg-blue-50 text-blue-700 border border-blue-200">
+                                +{diff} زيادة
+                              </span>
+                            );
+                          }
+                        })()}
                       </td>
                       <td className="p-3 text-center">
                         <select
@@ -1986,11 +2090,44 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                 <div className="flex items-center gap-2 flex-wrap">
                   <div>
                     <h4 className="font-bold text-slate-900 text-sm">{previewImageTitle || 'معاينة الصورة'}</h4>
-                    <span className="text-[11px] text-slate-400 font-mono">
-                      {previewTarget?.type === 'set'
-                        ? `سيت: ${previewTarget.set?.code || ''}`
-                        : `كود الأداة: ${previewTarget?.instrument?.code || ''}`}
-                    </span>
+                    <div className="flex items-center gap-2 text-[11px] text-slate-400 font-mono">
+                      <span>
+                        {previewTarget?.type === 'set'
+                          ? `سيت: ${previewTarget.set?.code || ''}`
+                          : `كود: ${previewTarget?.instrument?.code || ''}`}
+                      </span>
+                      {previewTarget?.type === 'instrument' && previewTarget.instrument && (
+                        <>
+                          <span>•</span>
+                          <span className="text-slate-700 font-bold font-sans">
+                            معياري: {previewTarget.instrument.quantity} | فعلي: {previewTarget.instrument.actualQuantity ?? previewTarget.instrument.quantity}
+                          </span>
+                          {(() => {
+                            const act = previewTarget.instrument.actualQuantity ?? previewTarget.instrument.quantity;
+                            const diff = act - previewTarget.instrument.quantity;
+                            if (diff === 0) {
+                              return (
+                                <span className="font-sans px-1.5 py-0.5 rounded text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold">
+                                  0 مطابق
+                                </span>
+                              );
+                            } else if (diff < 0) {
+                              return (
+                                <span className="font-sans px-1.5 py-0.5 rounded text-[10px] bg-rose-50 text-rose-700 border border-rose-200 font-bold">
+                                  {diff} نقص
+                                </span>
+                              );
+                            } else {
+                              return (
+                                <span className="font-sans px-1.5 py-0.5 rounded text-[10px] bg-blue-50 text-blue-700 border border-blue-200 font-bold">
+                                  +{diff} زيادة
+                                </span>
+                              );
+                            }
+                          })()}
+                        </>
+                      )}
+                    </div>
                   </div>
                   {previewTarget && (
                     <SyncStatusBadge
