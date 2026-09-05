@@ -73,6 +73,11 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
   const [showChecklistModal, setShowChecklistModal] = useState(false);
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
   const [previewImageTitle, setPreviewImageTitle] = useState<string>('');
+  const [previewTarget, setPreviewTarget] = useState<{
+    type: 'set' | 'instrument';
+    set?: SurgicalSet;
+    instrument?: SurgicalInstrument;
+  } | null>(null);
 
   // Batch Image Import State
   const [isProcessingImages, setIsProcessingImages] = useState(false);
@@ -280,6 +285,46 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
     }
   };
 
+  // Open Image Preview (Lightbox) with direct enlargement and edit capability
+  const openImagePreview = async (
+    type: 'set' | 'instrument',
+    item: SurgicalSet | SurgicalInstrument,
+    title: string
+  ) => {
+    setPreviewImageTitle(title);
+    if (type === 'set') {
+      const s = item as SurgicalSet;
+      setPreviewTarget({ type: 'set', set: s });
+      const url = await resolveSurgicalImageUrl({ imageUrl: s.imageUrl, setId: s.id, code: s.code });
+      setPreviewImageUrl(url || null);
+    } else {
+      const inst = item as SurgicalInstrument;
+      setPreviewTarget({ type: 'instrument', instrument: inst });
+      const url = await resolveSurgicalImageUrl({ imageUrl: inst.imageUrl, code: inst.code, id: inst.id });
+      setPreviewImageUrl(url || null);
+    }
+  };
+
+  // Delete image from currently previewed item
+  const handleDeletePreviewImage = () => {
+    if (!previewTarget) return;
+    if (!confirm('هل أنت متأكد من رغبتك في حذف هذه الصورة؟')) return;
+
+    if (previewTarget.type === 'set' && previewTarget.set) {
+      previewTarget.set.imageUrl = undefined;
+      SurgicalService.saveSet(previewTarget.set);
+      loadData();
+      setPreviewImageUrl(null);
+      alert('✅ تم حذف صورة غلاف السيت');
+    } else if (previewTarget.type === 'instrument' && previewTarget.instrument) {
+      previewTarget.instrument.imageUrl = undefined;
+      SurgicalService.saveInstrument(previewTarget.instrument);
+      loadData();
+      setPreviewImageUrl(null);
+      alert('✅ تم حذف صورة الأداة');
+    }
+  };
+
   // Handle Single Image Upload
   const handleSingleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -290,6 +335,8 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
       targetInstForImage.imageUrl = base64;
       SurgicalService.saveInstrument(targetInstForImage);
       loadData();
+      // Keep preview updated if preview modal is open
+      setPreviewImageUrl(base64);
       alert(`✅ تم تحديث صورة الأداة (${targetInstForImage.code} - ${targetInstForImage.name}) بنجاح`);
     } catch (err: any) {
       alert(`❌ فشل حفظ الصورة: ${err?.message}`);
@@ -309,6 +356,8 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
       targetSetForImage.imageUrl = base64;
       SurgicalService.saveSet(targetSetForImage);
       loadData();
+      // Keep preview updated if preview modal is open
+      setPreviewImageUrl(base64);
       alert(`✅ تم تعيين صورة غلاف السيت (${targetSetForImage.name}) بنجاح`);
     } catch (err: any) {
       alert(`❌ فشل تعيين صورة السيت: ${err?.message}`);
@@ -641,39 +690,20 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                       {/* Set Card Top Header */}
                       <div className="p-5 border-b border-slate-100 flex items-start justify-between gap-3">
                         <div className="flex items-start gap-3">
-                          <div className="relative group/setimg w-12 h-12 rounded-2xl overflow-hidden border border-slate-200/80 shadow-md shadow-blue-500/10 shrink-0 bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center">
+                          <div
+                            onClick={() => openImagePreview('set', set, `غلاف سيت: ${set.name}`)}
+                            className="w-12 h-12 rounded-2xl overflow-hidden border border-slate-200/80 shadow-md shadow-blue-500/10 shrink-0 bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center cursor-pointer hover:opacity-90 hover:scale-105 transition-all"
+                            title="انقر لتكبير ومعاينة صورة غلاف السيت"
+                          >
                             <SurgicalImage
                               src={set.imageUrl}
                               setId={set.id}
                               code={set.code}
                               alt={set.name}
-                              className="w-full h-full object-cover cursor-pointer"
+                              className="w-full h-full object-cover pointer-events-none"
                               containerClassName="w-full h-full flex items-center justify-center"
                               fallbackIcon={<Layers className="w-6 h-6 text-white" />}
-                              onClick={() => {
-                                resolveSurgicalImageUrl({ imageUrl: set.imageUrl, setId: set.id, code: set.code }).then((url) => {
-                                  if (url) {
-                                    setPreviewImageUrl(url);
-                                    setPreviewImageTitle(`غلاف سيت: ${set.name}`);
-                                  } else {
-                                    setTargetSetForImage(set);
-                                    setCoverInputRef.current?.click();
-                                  }
-                                });
-                              }}
-                              title="انقر لعرض أو تغيير صورة غلاف السيت"
                             />
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setTargetSetForImage(set);
-                                setCoverInputRef.current?.click();
-                              }}
-                              className="absolute inset-0 bg-black/50 text-white opacity-0 group-hover/setimg:opacity-100 flex items-center justify-center transition-opacity cursor-pointer"
-                              title="تغيير صورة غلاف السيت"
-                            >
-                              <Camera className="w-4 h-4" />
-                            </button>
                           </div>
                           <div>
                             <div className="flex items-center gap-2">
@@ -816,38 +846,20 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
               <div className="h-5 w-[1px] bg-slate-200" />
               
               {/* Set Cover Thumbnail */}
-              <div className="relative group/activesetimg w-10 h-10 rounded-xl overflow-hidden border border-slate-200 bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center shrink-0">
+              <div
+                onClick={() => openImagePreview('set', activeSet, `غلاف سيت: ${activeSet.name}`)}
+                className="w-10 h-10 rounded-xl overflow-hidden border border-slate-200 bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center shrink-0 cursor-pointer hover:opacity-90 hover:scale-105 transition-all shadow-xs"
+                title="انقر لتكبير ومعاينة صورة غلاف السيت"
+              >
                 <SurgicalImage
                   src={activeSet.imageUrl}
                   setId={activeSet.id}
                   code={activeSet.code}
                   alt={activeSet.name}
-                  className="w-full h-full object-cover cursor-pointer"
+                  className="w-full h-full object-cover pointer-events-none"
                   containerClassName="w-full h-full flex items-center justify-center"
                   fallbackIcon={<Layers className="w-5 h-5 text-white" />}
-                  onClick={() => {
-                    resolveSurgicalImageUrl({ imageUrl: activeSet.imageUrl, setId: activeSet.id, code: activeSet.code }).then((url) => {
-                      if (url) {
-                        setPreviewImageUrl(url);
-                        setPreviewImageTitle(`غلاف سيت: ${activeSet.name}`);
-                      } else {
-                        setTargetSetForImage(activeSet);
-                        setCoverInputRef.current?.click();
-                      }
-                    });
-                  }}
-                  title="انقر لعرض أو تغيير صورة غلاف السيت"
                 />
-                <button
-                  onClick={() => {
-                    setTargetSetForImage(activeSet);
-                    setCoverInputRef.current?.click();
-                  }}
-                  className="absolute inset-0 bg-black/50 text-white opacity-0 group-hover/activesetimg:opacity-100 flex items-center justify-center transition-opacity cursor-pointer"
-                  title="تغيير صورة غلاف السيت"
-                >
-                  <Camera className="w-3.5 h-3.5" />
-                </button>
               </div>
 
               <div>
@@ -1025,50 +1037,20 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                       <tr key={inst.id} className="hover:bg-slate-50/80 transition-colors">
                         {/* Image Thumbnail */}
                         <td className="p-2 text-center">
-                          <div className="relative inline-block w-10 h-10 rounded-lg overflow-hidden border border-slate-200 shadow-2xs group align-middle">
+                          <div
+                            onClick={() => openImagePreview('instrument', inst, `${inst.code} - ${inst.name}`)}
+                            className="inline-block w-10 h-10 rounded-lg overflow-hidden border border-slate-200 shadow-2xs align-middle cursor-pointer hover:scale-105 transition-transform bg-slate-50"
+                            title="انقر لتكبير ومعاينة صورة الأداة"
+                          >
                             <SurgicalImage
                               src={inst.imageUrl}
                               code={inst.code}
                               instrumentId={inst.id}
                               alt={inst.name}
-                              className="w-full h-full object-cover cursor-pointer"
+                              className="w-full h-full object-cover pointer-events-none"
                               containerClassName="w-full h-full flex items-center justify-center bg-slate-50"
-                              fallbackIcon={
-                                <button
-                                  onClick={() => {
-                                    setTargetInstForImage(inst);
-                                    singleImageInputRef.current?.click();
-                                  }}
-                                  className="w-full h-full text-slate-400 hover:text-blue-600 hover:bg-blue-50 flex items-center justify-center transition-colors border border-dashed border-slate-300"
-                                  title="إضافة صورة لهذه الأداة"
-                                >
-                                  <Camera className="w-4 h-4" />
-                                </button>
-                              }
-                              onClick={() => {
-                                resolveSurgicalImageUrl({ imageUrl: inst.imageUrl, code: inst.code, id: inst.id }).then((url) => {
-                                  if (url) {
-                                    setPreviewImageUrl(url);
-                                    setPreviewImageTitle(`${inst.code} - ${inst.name}`);
-                                  } else {
-                                    setTargetInstForImage(inst);
-                                    singleImageInputRef.current?.click();
-                                  }
-                                });
-                              }}
-                              title="انقر لتكبير الصورة"
+                              fallbackIcon={<Scissors className="w-4 h-4 text-slate-400" />}
                             />
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setTargetInstForImage(inst);
-                                singleImageInputRef.current?.click();
-                              }}
-                              className="absolute inset-0 bg-black/50 text-white opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity cursor-pointer"
-                              title="تغيير أو رفع صورة جديدة"
-                            >
-                              <Camera className="w-3.5 h-3.5" />
-                            </button>
                           </div>
                         </td>
 
@@ -1173,54 +1155,28 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                 >
                   <div>
                     {/* Image Box */}
-                    <div className="aspect-square bg-slate-100 relative overflow-hidden flex items-center justify-center group/cardimg">
+                    <div
+                      onClick={() => openImagePreview('instrument', inst, `${inst.code} - ${inst.name}`)}
+                      className="aspect-square bg-slate-100 relative overflow-hidden flex items-center justify-center cursor-pointer group/cardimg"
+                      title="انقر لتكبير ومعاينة صورة الأداة"
+                    >
                       <SurgicalImage
                         src={inst.imageUrl}
                         code={inst.code}
                         instrumentId={inst.id}
                         alt={inst.name}
-                        className="w-full h-full object-cover cursor-pointer group-hover/cardimg:scale-105 transition-transform"
+                        className="w-full h-full object-cover group-hover/cardimg:scale-105 transition-transform pointer-events-none"
                         containerClassName="w-full h-full flex items-center justify-center"
                         fallbackIcon={
-                          <div
-                            onClick={() => {
-                              setTargetInstForImage(inst);
-                              singleImageInputRef.current?.click();
-                            }}
-                            className="w-full h-full flex flex-col items-center justify-center text-slate-400 hover:text-blue-600 hover:bg-blue-50/50 cursor-pointer transition-colors p-2 text-center"
-                          >
-                            <Camera className="w-6 h-6 mb-1 opacity-60" />
-                            <span className="text-[10px] font-bold">رفع صورة</span>
+                          <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 p-2 text-center">
+                            <Scissors className="w-7 h-7 mb-1 opacity-50" />
+                            <span className="text-[10px] font-bold text-slate-400">معاينة / إضافة</span>
                           </div>
                         }
-                        onClick={() => {
-                          resolveSurgicalImageUrl({ imageUrl: inst.imageUrl, code: inst.code, id: inst.id }).then((url) => {
-                            if (url) {
-                              setPreviewImageUrl(url);
-                              setPreviewImageTitle(`${inst.code} - ${inst.name}`);
-                            } else {
-                              setTargetInstForImage(inst);
-                              singleImageInputRef.current?.click();
-                            }
-                          });
-                        }}
-                        title="انقر لتكبير الصورة"
                       />
-                      {/* Floating camera button to replace image on hover */}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setTargetInstForImage(inst);
-                          singleImageInputRef.current?.click();
-                        }}
-                        className="absolute bottom-2 left-2 p-1.5 rounded-lg bg-black/60 hover:bg-black/80 text-white opacity-0 group-hover/cardimg:opacity-100 transition-opacity cursor-pointer shadow-sm"
-                        title="تغيير صورة الأداة"
-                      >
-                        <Camera className="w-3.5 h-3.5" />
-                      </button>
 
                       {/* Code Badge Overlay */}
-                      <span className="absolute top-2 right-2 font-mono text-[10px] font-bold bg-slate-900/80 text-white px-2 py-0.5 rounded-md backdrop-blur-xs">
+                      <span className="absolute top-2 right-2 font-mono text-[10px] font-bold bg-slate-900/80 text-white px-2 py-0.5 rounded-md backdrop-blur-xs shadow-xs">
                         {inst.code}
                       </span>
                     </div>
@@ -1965,32 +1921,121 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
       )}
 
       {/* ========================================================================= */}
-      {/* MODAL: IMAGE PREVIEW MODAL */}
+      {/* MODAL: IMAGE PREVIEW MODAL (LIGHTBOX WITH EDIT & CHANGE CONTROLS) */}
       {/* ========================================================================= */}
-      {previewImageUrl && (
+      {(previewImageUrl || previewTarget) && (
         <div
           className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4"
-          onClick={() => setPreviewImageUrl(null)}
+          onClick={() => {
+            setPreviewImageUrl(null);
+            setPreviewTarget(null);
+          }}
         >
           <div
-            className="bg-white rounded-3xl max-w-xl w-full p-5 shadow-2xl space-y-3 text-right"
+            className="bg-white rounded-3xl max-w-2xl w-full p-5 shadow-2xl space-y-4 text-right"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between border-b pb-2">
-              <h4 className="font-bold text-slate-900 text-sm">{previewImageTitle || 'صورة الأداة الجراحية'}</h4>
+            {/* Header */}
+            <div className="flex items-center justify-between border-b pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
+                  {previewTarget?.type === 'set' ? <Layers className="w-5 h-5" /> : <Scissors className="w-5 h-5" />}
+                </div>
+                <div>
+                  <h4 className="font-bold text-slate-900 text-sm">{previewImageTitle || 'معاينة الصورة'}</h4>
+                  <span className="text-[11px] text-slate-400 font-mono">
+                    {previewTarget?.type === 'set'
+                      ? `سيت: ${previewTarget.set?.code || ''}`
+                      : `كود الأداة: ${previewTarget?.instrument?.code || ''}`}
+                  </span>
+                </div>
+              </div>
               <button
-                onClick={() => setPreviewImageUrl(null)}
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-600"
+                onClick={() => {
+                  setPreviewImageUrl(null);
+                  setPreviewTarget(null);
+                }}
+                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="rounded-2xl overflow-hidden bg-slate-900 flex items-center justify-center max-h-[70vh]">
-              <img
-                src={previewImageUrl}
-                alt={previewImageTitle}
-                className="max-h-[68vh] w-auto object-contain rounded-xl"
-              />
+
+            {/* Main Image Box */}
+            <div className="rounded-2xl overflow-hidden bg-slate-950 flex items-center justify-center min-h-[260px] max-h-[65vh] relative p-2 shadow-inner">
+              {previewImageUrl ? (
+                <img
+                  src={previewImageUrl}
+                  alt={previewImageTitle}
+                  className="max-h-[62vh] max-w-full object-contain rounded-xl"
+                />
+              ) : (
+                <div className="text-center py-12 px-4 text-slate-300 space-y-2">
+                  <Camera className="w-12 h-12 mx-auto text-slate-500 opacity-60" />
+                  <p className="text-sm font-bold text-white">لا توجد صورة مسجلة حتى الآن</p>
+                  <p className="text-xs text-slate-400">يمكنك رفع صورة من جهازك بالضغط على الزر أدناه</p>
+                </div>
+              )}
+            </div>
+
+            {/* Action Buttons Footer */}
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100">
+              <div className="flex items-center gap-2">
+                {/* Change or Upload Image */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (previewTarget?.type === 'set' && previewTarget.set) {
+                      setTargetSetForImage(previewTarget.set);
+                      setCoverInputRef.current?.click();
+                    } else if (previewTarget?.type === 'instrument' && previewTarget.instrument) {
+                      setTargetInstForImage(previewTarget.instrument);
+                      singleImageInputRef.current?.click();
+                    }
+                  }}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-xs transition-colors cursor-pointer"
+                >
+                  <Camera className="w-4 h-4" />
+                  <span>{previewImageUrl ? 'تغيير أو تحديث الصورة' : 'اختيار ورفع صورة الآن'}</span>
+                </button>
+
+                {/* Delete Image */}
+                {previewImageUrl && (
+                  <button
+                    type="button"
+                    onClick={handleDeletePreviewImage}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold text-xs transition-colors cursor-pointer"
+                    title="حذف هذه الصورة"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>حذف الصورة</span>
+                  </button>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2">
+                {previewImageUrl && (
+                  <a
+                    href={previewImageUrl}
+                    download={`${previewImageTitle || 'surgical_image'}.jpg`}
+                    className="flex items-center gap-1 px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-colors"
+                    title="تنزيل الصورة"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>تنزيل</span>
+                  </a>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPreviewImageUrl(null);
+                    setPreviewTarget(null);
+                  }}
+                  className="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold text-xs transition-colors cursor-pointer"
+                >
+                  إغلاق
+                </button>
+              </div>
             </div>
           </div>
         </div>
