@@ -32,6 +32,7 @@ export interface Asset {
   imageUrl?: string;           // 15. صورة الجهاز
   createdAt: string;
   updatedAt: string;
+  syncedAt?: string;
 }
 
 export type TicketStatus = 'معلق' | 'قيد الصيانة' | 'تم الصيانة';
@@ -67,6 +68,7 @@ export interface MaintenanceTicket {
   technicianSignature?: string; // توقيع الفني
   managerSignature?: string;    // توقيع مسؤول الصيانة
   updatedAt: string;
+  syncedAt?: string;
 }
 
 export type PeriodicCategory = 'التكييف' | 'الزيوت والفلاتر' | 'البطاريات' | string;
@@ -94,6 +96,8 @@ export interface PeriodicMaintenanceRecord {
   performedBy: string;
   notes?: string;
   createdAt: string;
+  updatedAt?: string;
+  syncedAt?: string;
 }
 
 export interface HistoryLog {
@@ -129,6 +133,7 @@ export interface SurgicalInstrument {
   notes?: string;
   imageUrl?: string;
   updatedAt?: string;
+  syncedAt?: string;
 }
 
 export interface SurgicalSet {
@@ -146,6 +151,7 @@ export interface SurgicalSet {
   lastAuditDate?: string;
   createdAt: string;
   updatedAt: string;
+  syncedAt?: string;
 }
 
 export interface ImageImportReport {
@@ -219,4 +225,5 @@ export interface AuditSession {
   items: AuditItem[];
   createdAt: string;
   updatedAt: string;
+  syncedAt?: string;
 }

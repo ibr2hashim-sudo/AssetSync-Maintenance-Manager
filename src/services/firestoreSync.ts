@@ -516,10 +516,15 @@ export class FirestoreSyncService {
       console.log('[Eco-Sync]: Downloading full database snapshot...');
 
       // 1. Assets
+      const pullNow = new Date().toISOString();
       const assetsSnap = await getDocs(collection(db, 'assets'));
       if (!assetsSnap.empty) {
         const remoteAssets: Asset[] = [];
-        assetsSnap.forEach((d) => remoteAssets.push(d.data() as Asset));
+        assetsSnap.forEach((d) => {
+          const item = d.data() as Asset;
+          if (!item.syncedAt) item.syncedAt = item.updatedAt || pullNow;
+          remoteAssets.push(item);
+        });
         localStorage.setItem('asset_mgmt_assets', JSON.stringify(remoteAssets));
       }
 
@@ -527,7 +532,11 @@ export class FirestoreSyncService {
       const ticketsSnap = await getDocs(collection(db, 'tickets'));
       if (!ticketsSnap.empty) {
         const remoteTickets: MaintenanceTicket[] = [];
-        ticketsSnap.forEach((d) => remoteTickets.push(d.data() as MaintenanceTicket));
+        ticketsSnap.forEach((d) => {
+          const item = d.data() as MaintenanceTicket;
+          if (!item.syncedAt) item.syncedAt = item.updatedAt || pullNow;
+          remoteTickets.push(item);
+        });
         localStorage.setItem('asset_mgmt_tickets', JSON.stringify(remoteTickets));
       }
 
@@ -535,7 +544,11 @@ export class FirestoreSyncService {
       const periodicSnap = await getDocs(collection(db, 'periodic_records'));
       if (!periodicSnap.empty) {
         const remotePeriodic: PeriodicMaintenanceRecord[] = [];
-        periodicSnap.forEach((d) => remotePeriodic.push(d.data() as PeriodicMaintenanceRecord));
+        periodicSnap.forEach((d) => {
+          const item = d.data() as PeriodicMaintenanceRecord;
+          if (!item.syncedAt) item.syncedAt = item.updatedAt || pullNow;
+          remotePeriodic.push(item);
+        });
         localStorage.setItem('asset_mgmt_periodic', JSON.stringify(remotePeriodic));
       }
 
@@ -568,7 +581,11 @@ export class FirestoreSyncService {
       const setsSnap = await getDocs(collection(db, 'surgical_sets'));
       if (!setsSnap.empty) {
         const remoteSets: SurgicalSet[] = [];
-        setsSnap.forEach((d) => remoteSets.push(d.data() as SurgicalSet));
+        setsSnap.forEach((d) => {
+          const item = d.data() as SurgicalSet;
+          if (!item.syncedAt) item.syncedAt = item.updatedAt || pullNow;
+          remoteSets.push(item);
+        });
         localStorage.setItem('asset_mgmt_surgical_sets', JSON.stringify(remoteSets));
       }
 
@@ -578,6 +595,7 @@ export class FirestoreSyncService {
         const remoteInsts: SurgicalInstrument[] = [];
         instSnap.forEach((d) => {
           const inst = d.data() as SurgicalInstrument;
+          if (!inst.syncedAt) inst.syncedAt = inst.updatedAt || pullNow;
           remoteInsts.push(inst);
           if (inst.imageUrl) {
             saveImageToDB(`inst_${inst.id}`, inst.imageUrl).catch(() => {});
@@ -632,18 +650,36 @@ export class FirestoreSyncService {
   /**
    * Push an individual asset to Firestore + Emit Sync Pulse
    */
-  static async syncAsset(asset: Asset): Promise<void> {
+  static async syncAsset(asset: Asset): Promise<boolean> {
     try {
+      const now = new Date().toISOString();
+      const updatedAsset: Asset = { ...asset, syncedAt: now };
       const docRef = doc(db, 'assets', asset.id);
-      await setDoc(docRef, cleanForFirestore(asset), { merge: true });
+      await setDoc(docRef, cleanForFirestore(updatedAsset), { merge: true });
       await this.emitSyncChange({
         col: 'assets',
         id: asset.id,
         action: 'set',
         timestamp: Date.now(),
       });
+
+      // Update local storage record with syncedAt
+      try {
+        const assetsStr = localStorage.getItem('asset_mgmt_assets');
+        if (assetsStr) {
+          const list: Asset[] = JSON.parse(assetsStr);
+          const idx = list.findIndex((a) => a.id === asset.id);
+          if (idx !== -1) {
+            list[idx].syncedAt = now;
+            localStorage.setItem('asset_mgmt_assets', JSON.stringify(list));
+          }
+        }
+      } catch {}
+
+      return true;
     } catch (err) {
       this.handleSyncError('syncAsset', err);
+      return false;
     }
   }
 
@@ -667,18 +703,36 @@ export class FirestoreSyncService {
   /**
    * Push an individual ticket to Firestore + Emit Sync Pulse
    */
-  static async syncTicket(ticket: MaintenanceTicket): Promise<void> {
+  static async syncTicket(ticket: MaintenanceTicket): Promise<boolean> {
     try {
+      const now = new Date().toISOString();
+      const updatedTicket: MaintenanceTicket = { ...ticket, syncedAt: now };
       const docRef = doc(db, 'tickets', ticket.id);
-      await setDoc(docRef, cleanForFirestore(ticket), { merge: true });
+      await setDoc(docRef, cleanForFirestore(updatedTicket), { merge: true });
       await this.emitSyncChange({
         col: 'tickets',
         id: ticket.id,
         action: 'set',
         timestamp: Date.now(),
       });
+
+      // Update local storage record with syncedAt
+      try {
+        const ticketsStr = localStorage.getItem('asset_mgmt_tickets');
+        if (ticketsStr) {
+          const list: MaintenanceTicket[] = JSON.parse(ticketsStr);
+          const idx = list.findIndex((t) => t.id === ticket.id);
+          if (idx !== -1) {
+            list[idx].syncedAt = now;
+            localStorage.setItem('asset_mgmt_tickets', JSON.stringify(list));
+          }
+        }
+      } catch {}
+
+      return true;
     } catch (err) {
       this.handleSyncError('syncTicket', err);
+      return false;
     }
   }
 
@@ -702,18 +756,36 @@ export class FirestoreSyncService {
   /**
    * Push an individual periodic record to Firestore + Emit Sync Pulse
    */
-  static async syncPeriodicRecord(record: PeriodicMaintenanceRecord): Promise<void> {
+  static async syncPeriodicRecord(record: PeriodicMaintenanceRecord): Promise<boolean> {
     try {
+      const now = new Date().toISOString();
+      const updatedRecord: PeriodicMaintenanceRecord = { ...record, syncedAt: now };
       const docRef = doc(db, 'periodic_records', record.id);
-      await setDoc(docRef, cleanForFirestore(record), { merge: true });
+      await setDoc(docRef, cleanForFirestore(updatedRecord), { merge: true });
       await this.emitSyncChange({
         col: 'periodic_records',
         id: record.id,
         action: 'set',
         timestamp: Date.now(),
       });
+
+      // Update local storage record with syncedAt
+      try {
+        const periodicStr = localStorage.getItem('asset_mgmt_periodic');
+        if (periodicStr) {
+          const list: PeriodicMaintenanceRecord[] = JSON.parse(periodicStr);
+          const idx = list.findIndex((p) => p.id === record.id);
+          if (idx !== -1) {
+            list[idx].syncedAt = now;
+            localStorage.setItem('asset_mgmt_periodic', JSON.stringify(list));
+          }
+        }
+      } catch {}
+
+      return true;
     } catch (err) {
       this.handleSyncError('syncPeriodicRecord', err);
+      return false;
     }
   }
 
@@ -737,18 +809,36 @@ export class FirestoreSyncService {
   /**
    * Push an audit session to Firestore + Emit Sync Pulse
    */
-  static async syncAuditSession(session: AuditSession): Promise<void> {
+  static async syncAuditSession(session: AuditSession): Promise<boolean> {
     try {
+      const now = new Date().toISOString();
+      const updatedSession: AuditSession = { ...session, syncedAt: now };
       const docRef = doc(db, 'audit_sessions', session.id);
-      await setDoc(docRef, cleanForFirestore(session), { merge: true });
+      await setDoc(docRef, cleanForFirestore(updatedSession), { merge: true });
       await this.emitSyncChange({
         col: 'audit_sessions',
         id: session.id,
         action: 'set',
         timestamp: Date.now(),
       });
+
+      // Update local storage record with syncedAt
+      try {
+        const auditsStr = localStorage.getItem('asset_mgmt_audit_sessions');
+        if (auditsStr) {
+          const list: AuditSession[] = JSON.parse(auditsStr);
+          const idx = list.findIndex((a) => a.id === session.id);
+          if (idx !== -1) {
+            list[idx].syncedAt = now;
+            localStorage.setItem('asset_mgmt_audit_sessions', JSON.stringify(list));
+          }
+        }
+      } catch {}
+
+      return true;
     } catch (err) {
       this.handleSyncError('syncAuditSession', err);
+      return false;
     }
   }
 
@@ -825,18 +915,36 @@ export class FirestoreSyncService {
   /**
    * Push an individual surgical set to Firestore + Emit Sync Pulse
    */
-  static async syncSurgicalSet(set: SurgicalSet): Promise<void> {
+  static async syncSurgicalSet(set: SurgicalSet): Promise<boolean> {
     try {
+      const now = new Date().toISOString();
+      const updatedSet: SurgicalSet = { ...set, syncedAt: now };
       const docRef = doc(db, 'surgical_sets', set.id);
-      await setDoc(docRef, cleanForFirestore(set), { merge: true });
+      await setDoc(docRef, cleanForFirestore(updatedSet), { merge: true });
       await this.emitSyncChange({
         col: 'surgical_sets',
         id: set.id,
         action: 'set',
         timestamp: Date.now(),
       });
+
+      // Update local storage record with syncedAt
+      try {
+        const setsStr = localStorage.getItem('asset_mgmt_surgical_sets');
+        if (setsStr) {
+          const list: SurgicalSet[] = JSON.parse(setsStr);
+          const idx = list.findIndex((s) => s.id === set.id);
+          if (idx !== -1) {
+            list[idx].syncedAt = now;
+            localStorage.setItem('asset_mgmt_surgical_sets', JSON.stringify(list));
+          }
+        }
+      } catch {}
+
+      return true;
     } catch (err) {
       this.handleSyncError('syncSurgicalSet', err);
+      return false;
     }
   }
 
@@ -860,18 +968,36 @@ export class FirestoreSyncService {
   /**
    * Push an individual surgical instrument to Firestore + Emit Sync Pulse
    */
-  static async syncSurgicalInstrument(instrument: SurgicalInstrument): Promise<void> {
+  static async syncSurgicalInstrument(instrument: SurgicalInstrument): Promise<boolean> {
     try {
+      const now = new Date().toISOString();
+      const updatedInst: SurgicalInstrument = { ...instrument, syncedAt: now };
       const docRef = doc(db, 'surgical_instruments', instrument.id);
-      await setDoc(docRef, cleanForFirestore(instrument), { merge: true });
+      await setDoc(docRef, cleanForFirestore(updatedInst), { merge: true });
       await this.emitSyncChange({
         col: 'surgical_instruments',
         id: instrument.id,
         action: 'set',
         timestamp: Date.now(),
       });
+
+      // Update local storage record with syncedAt
+      try {
+        const instStr = localStorage.getItem('asset_mgmt_surgical_instruments');
+        if (instStr) {
+          const list: SurgicalInstrument[] = JSON.parse(instStr);
+          const idx = list.findIndex((i) => i.id === instrument.id);
+          if (idx !== -1) {
+            list[idx].syncedAt = now;
+            localStorage.setItem('asset_mgmt_surgical_instruments', JSON.stringify(list));
+          }
+        }
+      } catch {}
+
+      return true;
     } catch (err) {
       this.handleSyncError('syncSurgicalInstrument', err);
+      return false;
     }
   }
 
@@ -1007,16 +1133,36 @@ export class FirestoreSyncService {
       }
 
       // Initialize/Reset Meta Doc
+      const nowIso = new Date().toISOString();
       await setDoc(doc(db, 'settings', 'sync_meta'), {
         version: 1,
-        lastUpdated: new Date().toISOString(),
+        lastUpdated: nowIso,
         recentChanges: [],
         assetsCount: assets.length,
         ticketsCount: tickets.length,
       });
 
+      // Update all local records with syncedAt so user sees them as 100% synced
+      assets.forEach((a) => { a.syncedAt = nowIso; });
+      tickets.forEach((t) => { t.syncedAt = nowIso; });
+      periodic.forEach((p) => { p.syncedAt = nowIso; });
+      audits.forEach((a) => { a.syncedAt = nowIso; });
+      sets.forEach((s) => { s.syncedAt = nowIso; });
+      instruments.forEach((i) => { i.syncedAt = nowIso; });
+
+      localStorage.setItem('asset_mgmt_assets', JSON.stringify(assets));
+      localStorage.setItem('asset_mgmt_tickets', JSON.stringify(tickets));
+      localStorage.setItem('asset_mgmt_periodic', JSON.stringify(periodic));
+      localStorage.setItem('asset_mgmt_audit_sessions', JSON.stringify(audits));
+      localStorage.setItem('asset_mgmt_surgical_sets', JSON.stringify(sets));
+      localStorage.setItem('asset_mgmt_surgical_instruments', JSON.stringify(instruments));
+
       localStorage.setItem(LOCAL_SYNC_STORAGE.LAST_PROCESSED_TS, String(Date.now()));
       localStorage.setItem(LOCAL_SYNC_STORAGE.INITIALIZED_FLAG, 'true');
+
+      if (this.onDataChangedCallback) {
+        this.onDataChangedCallback();
+      }
 
       this.isSyncing = false;
       return {

@@ -18,6 +18,8 @@ import {
 } from 'lucide-react';
 import { Asset, PeriodicCategory, PeriodicMaintenanceRecord, User } from '../types';
 import { StorageService } from '../services/storage';
+import { SyncStatusBadge } from './SyncStatusBadge';
+import { FirestoreSyncService } from '../services/firestoreSync';
 
 interface PeriodicMaintenanceViewProps {
   currentUser: User | null;
@@ -400,7 +402,18 @@ export const PeriodicMaintenanceView: React.FC<PeriodicMaintenanceViewProps> = (
                     {filteredRecords.map((rec) => (
                       <tr key={rec.id} className="hover:bg-slate-50/70 transition-colors">
                         <td className="p-3.5 whitespace-nowrap font-mono font-semibold text-slate-800">
-                          {rec.maintenanceDate}
+                          <div className="flex items-center gap-1.5">
+                            <span>{rec.maintenanceDate}</span>
+                            <SyncStatusBadge
+                              item={rec}
+                              size="xs"
+                              variant="icon-only"
+                              onSyncNow={async () => {
+                                await FirestoreSyncService.syncPeriodicRecord(rec);
+                                onRefresh();
+                              }}
+                            />
+                          </div>
                         </td>
                         <td className="p-3.5 whitespace-nowrap font-semibold text-slate-800">
                           {rec.mainDepartment}

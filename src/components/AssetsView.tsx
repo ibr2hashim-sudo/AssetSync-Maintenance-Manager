@@ -30,6 +30,9 @@ import { StorageService } from '../services/storage';
 import { ExcelUtils } from '../utils/excelImportExport';
 import { AssetImage } from './AssetImage';
 import { BarcodeCameraScanner } from './BarcodeCameraScanner';
+import { SyncStatusBadge } from './SyncStatusBadge';
+import { FirestoreSyncService } from '../services/firestoreSync';
+import { formatSyncTimestamp } from '../utils/syncUtils';
 
 interface AssetsViewProps {
   currentUser: User | null;
@@ -905,11 +908,19 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
                       </span>
                     </div>
 
-                    {/* Custom ID Badge */}
-                    <div className="absolute top-3 left-3">
-                      <span className="px-2 py-0.5 rounded-lg bg-slate-900/80 text-white text-[11px] font-mono font-bold backdrop-blur-xs">
+                    {/* Custom ID & Sync Status Badge */}
+                    <div className="absolute top-3 left-3 flex items-center gap-1.5">
+                      <span className="px-2 py-0.5 rounded-lg bg-slate-900/80 text-white text-[11px] font-mono font-bold backdrop-blur-xs shadow-xs">
                         ID: {asset.customId}
                       </span>
+                      <SyncStatusBadge
+                        item={asset}
+                        size="xs"
+                        onSyncNow={async () => {
+                          await FirestoreSyncService.syncAsset(asset);
+                          onRefresh();
+                        }}
+                      />
                     </div>
                   </div>
 
@@ -1755,13 +1766,21 @@ const AssetDetailModal: React.FC<AssetDetailModalProps> = ({ asset, onClose, onO
     <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
       <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl my-8 space-y-5 text-right">
         <div className="flex items-center justify-between border-b pb-3">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="px-2.5 py-0.5 rounded-lg bg-blue-600 text-white text-xs font-mono font-bold">
               ID: {asset.customId}
             </span>
             <h3 className="text-base font-bold text-slate-900">{asset.deviceName}</h3>
+            <SyncStatusBadge
+              item={asset}
+              size="sm"
+              onSyncNow={async () => {
+                await FirestoreSyncService.syncAsset(asset);
+                onClose();
+              }}
+            />
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 cursor-pointer">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -1859,6 +1878,22 @@ const AssetDetailModal: React.FC<AssetDetailModalProps> = ({ asset, onClose, onO
           <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100">
             <span className="text-slate-400 block text-[11px]">14. ملاحظات:</span>
             <span className="font-bold text-slate-800">{asset.notes || 'لا يوجد'}</span>
+          </div>
+
+          <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-between col-span-2 sm:col-span-3">
+            <div>
+              <span className="text-slate-400 block text-[11px]">15. حالة المزامنة السحابية (Cloud Sync):</span>
+              <span className="text-xs font-bold text-slate-800 font-mono">
+                {asset.syncedAt ? `تمت المزامنة: ${formatSyncTimestamp(asset.syncedAt)}` : 'بانتظار الرفع السحابي'}
+              </span>
+            </div>
+            <SyncStatusBadge
+              item={asset}
+              size="sm"
+              onSyncNow={async () => {
+                await FirestoreSyncService.syncAsset(asset);
+              }}
+            />
           </div>
         </div>
 

@@ -43,6 +43,8 @@ import {
 } from '../services/surgicalStorage';
 import { StorageService } from '../services/storage';
 import { SurgicalImage, resolveSurgicalImageUrl } from './SurgicalImage';
+import { SyncStatusBadge } from './SyncStatusBadge';
+import { FirestoreSyncService } from '../services/firestoreSync';
 
 interface SurgicalSetsViewProps {
   currentUser: User | null;
@@ -706,7 +708,7 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                             />
                           </div>
                           <div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-wrap">
                               <span className="font-mono text-[11px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg border border-blue-100">
                                 {set.code}
                               </span>
@@ -717,6 +719,14 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                               >
                                 {set.status}
                               </span>
+                              <SyncStatusBadge
+                                item={set}
+                                size="xs"
+                                onSyncNow={async () => {
+                                  await FirestoreSyncService.syncSurgicalSet(set);
+                                  loadData();
+                                }}
+                              />
                             </div>
                             <h3 className="text-sm font-bold text-slate-900 mt-1 leading-snug">
                               {set.name}
@@ -863,7 +873,7 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
               </div>
 
               <div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <h2 className="text-base font-black text-slate-900">{activeSet.name}</h2>
                   <span className="font-mono text-xs font-bold text-blue-600 bg-blue-50 px-2.5 py-0.5 rounded-lg border border-blue-100">
                     {activeSet.code}
@@ -875,6 +885,14 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                   >
                     {activeSet.status}
                   </span>
+                  <SyncStatusBadge
+                    item={activeSet}
+                    size="sm"
+                    onSyncNow={async () => {
+                      await FirestoreSyncService.syncSurgicalSet(activeSet);
+                      loadData();
+                    }}
+                  />
                 </div>
                 <p className="text-xs text-slate-500 mt-0.5">
                   {activeSet.department} {activeSet.subLocation ? `• ${activeSet.subLocation}` : ''} • إجمالي الأدوات: {activeSetInstruments.length} أداة
@@ -1056,9 +1074,20 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
 
                         {/* Code */}
                         <td className="p-3 whitespace-nowrap">
-                          <span className="font-mono font-bold text-slate-900 bg-slate-100 px-2 py-1 rounded-lg border border-slate-200">
-                            {inst.code}
-                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-mono font-bold text-slate-900 bg-slate-100 px-2 py-1 rounded-lg border border-slate-200">
+                              {inst.code}
+                            </span>
+                            <SyncStatusBadge
+                              item={inst}
+                              size="xs"
+                              variant="icon-only"
+                              onSyncNow={async () => {
+                                await FirestoreSyncService.syncSurgicalInstrument(inst);
+                                loadData();
+                              }}
+                            />
+                          </div>
                         </td>
 
                         {/* Name */}
@@ -1179,6 +1208,19 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                       <span className="absolute top-2 right-2 font-mono text-[10px] font-bold bg-slate-900/80 text-white px-2 py-0.5 rounded-md backdrop-blur-xs shadow-xs">
                         {inst.code}
                       </span>
+
+                      {/* Cloud Sync Overlay */}
+                      <div className="absolute top-2 left-2 bg-white/90 backdrop-blur-xs rounded-md shadow-xs p-0.5">
+                        <SyncStatusBadge
+                          item={inst}
+                          size="xs"
+                          variant="icon-only"
+                          onSyncNow={async () => {
+                            await FirestoreSyncService.syncSurgicalInstrument(inst);
+                            loadData();
+                          }}
+                        />
+                      </div>
                     </div>
 
                     {/* Details */}
@@ -1941,13 +1983,29 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                 <div className="w-9 h-9 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
                   {previewTarget?.type === 'set' ? <Layers className="w-5 h-5" /> : <Scissors className="w-5 h-5" />}
                 </div>
-                <div>
-                  <h4 className="font-bold text-slate-900 text-sm">{previewImageTitle || 'معاينة الصورة'}</h4>
-                  <span className="text-[11px] text-slate-400 font-mono">
-                    {previewTarget?.type === 'set'
-                      ? `سيت: ${previewTarget.set?.code || ''}`
-                      : `كود الأداة: ${previewTarget?.instrument?.code || ''}`}
-                  </span>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <div>
+                    <h4 className="font-bold text-slate-900 text-sm">{previewImageTitle || 'معاينة الصورة'}</h4>
+                    <span className="text-[11px] text-slate-400 font-mono">
+                      {previewTarget?.type === 'set'
+                        ? `سيت: ${previewTarget.set?.code || ''}`
+                        : `كود الأداة: ${previewTarget?.instrument?.code || ''}`}
+                    </span>
+                  </div>
+                  {previewTarget && (
+                    <SyncStatusBadge
+                      item={previewTarget.type === 'set' ? previewTarget.set : previewTarget.instrument}
+                      size="xs"
+                      onSyncNow={async () => {
+                        if (previewTarget.type === 'set' && previewTarget.set) {
+                          await FirestoreSyncService.syncSurgicalSet(previewTarget.set);
+                        } else if (previewTarget.instrument) {
+                          await FirestoreSyncService.syncSurgicalInstrument(previewTarget.instrument);
+                        }
+                        loadData();
+                      }}
+                    />
+                  )}
                 </div>
               </div>
               <button

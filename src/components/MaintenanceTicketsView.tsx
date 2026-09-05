@@ -23,6 +23,8 @@ import { Asset, MaintenanceTicket, TicketStatus, User } from '../types';
 import { StorageService } from '../services/storage';
 import { PDFReportGenerator } from '../utils/pdfExport';
 import { MaintenanceReportTemplate } from './MaintenanceReportTemplate';
+import { SyncStatusBadge } from './SyncStatusBadge';
+import { FirestoreSyncService } from '../services/firestoreSync';
 
 interface MaintenanceTicketsViewProps {
   currentUser: User | null;
@@ -371,6 +373,15 @@ export const MaintenanceTicketsView: React.FC<MaintenanceTicketsViewProps> = ({
                       <Calendar className="w-3.5 h-3.5" />
                       {ticket.complaintDate} ({ticket.complaintTime})
                     </span>
+
+                    <SyncStatusBadge
+                      item={ticket}
+                      size="xs"
+                      onSyncNow={async () => {
+                        await FirestoreSyncService.syncTicket(ticket);
+                        onRefresh();
+                      }}
+                    />
                   </div>
 
                   {/* Top Right: Submitted by */}
