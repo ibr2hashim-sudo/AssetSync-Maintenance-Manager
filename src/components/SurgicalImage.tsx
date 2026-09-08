@@ -15,6 +15,16 @@ export function getSurgicalImageCache(key: string): string | undefined {
   return surgicalImageCache.get(key.trim().toLowerCase());
 }
 
+export function removeSurgicalImageCache(key: string) {
+  if (!key) return;
+  const k = key.trim().toLowerCase();
+  surgicalImageCache.delete(k);
+}
+
+export function clearSurgicalImageCache() {
+  surgicalImageCache.clear();
+}
+
 /**
  * Resolves a surgical item image (instrument or set) from memory, data URI, or IndexedDB
  */

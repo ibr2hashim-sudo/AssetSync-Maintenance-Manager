@@ -379,22 +379,22 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
   };
 
   // Delete image from currently previewed item
-  const handleDeletePreviewImage = () => {
+  const handleDeletePreviewImage = async () => {
     if (!previewTarget) return;
-    if (!confirm('هل أنت متأكد من رغبتك في حذف هذه الصورة؟')) return;
+    if (!confirm('هل أنت متأكد من رغبتك في حذف هذه الصورة نهائياً؟')) return;
 
     if (previewTarget.type === 'set' && previewTarget.set) {
-      previewTarget.set.imageUrl = undefined;
-      SurgicalService.saveSet(previewTarget.set);
+      await SurgicalService.removeSetImage(previewTarget.set);
       loadData();
       setPreviewImageUrl(null);
-      alert('✅ تم حذف صورة غلاف السيت');
+      setPreviewTarget(null);
+      alert('✅ تم حذف صورة غلاف السيت نهائياً');
     } else if (previewTarget.type === 'instrument' && previewTarget.instrument) {
-      previewTarget.instrument.imageUrl = undefined;
-      SurgicalService.saveInstrument(previewTarget.instrument);
+      await SurgicalService.removeInstrumentImage(previewTarget.instrument);
       loadData();
       setPreviewImageUrl(null);
-      alert('✅ تم حذف صورة الأداة');
+      setPreviewTarget(null);
+      alert('✅ تم حذف صورة الأداة نهائياً');
     }
   };
 
@@ -1457,15 +1457,29 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
 
                   {/* Footer buttons */}
                   <div className="px-3 py-2 bg-slate-50 border-t border-slate-100 flex items-center justify-between text-xs">
-                    <button
-                      onClick={() => {
-                        setTargetInstForImage(inst);
-                        singleImageInputRef.current?.click();
-                      }}
-                      className="text-blue-600 hover:underline font-bold text-[10px]"
-                    >
-                      تغيير الصورة
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => {
+                          setTargetInstForImage(inst);
+                          singleImageInputRef.current?.click();
+                        }}
+                        className="text-blue-600 hover:underline font-bold text-[10px]"
+                      >
+                        تغيير الصورة
+                      </button>
+                      <button
+                        onClick={async () => {
+                          if (confirm(`هل أنت متأكد من حذف صورة الأداة (${inst.code} - ${inst.name})؟`)) {
+                            await SurgicalService.removeInstrumentImage(inst);
+                            loadData();
+                          }
+                        }}
+                        className="text-rose-600 hover:underline font-bold text-[10px]"
+                        title="حذف صورة الأداة"
+                      >
+                        حذف الصورة
+                      </button>
+                    </div>
                     {currentUser?.role !== 'supervisor' && (
                       <button
                         onClick={() => {
@@ -2018,7 +2032,7 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
             </div>
 
             <form
-              onSubmit={(e) => {
+              onSubmit={async (e) => {
                 e.preventDefault();
                 const formData = new FormData(e.currentTarget);
                 const code = formData.get('code') as string;
@@ -2034,6 +2048,11 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                   return;
                 }
 
+                // Check if user explicitly removed the image
+                if (editingInst && !instModalImageUrl && editingInst.imageUrl) {
+                  await SurgicalService.removeInstrumentImage(editingInst);
+                }
+
                 const newInst: SurgicalInstrument = {
                   id: editingInst ? editingInst.id : `inst-${activeSet.id}-${Date.now()}`,
                   setId: activeSet.id,
@@ -2046,7 +2065,7 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                   actualQuantity,
                   status,
                   notes,
-                  imageUrl: instModalImageUrl ?? editingInst?.imageUrl,
+                  imageUrl: instModalImageUrl || undefined,
                   updatedAt: new Date().toISOString(),
                 };
 

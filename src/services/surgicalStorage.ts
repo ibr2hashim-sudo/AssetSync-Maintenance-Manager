@@ -1,7 +1,8 @@
 import * as XLSX from 'xlsx';
 import JSZip from 'jszip';
 import { SurgicalInstrument, SurgicalSet, SurgicalSetStatus, InstrumentStatus } from '../types';
-import { saveImageToDB, getImageFromDB } from './storage';
+import { saveImageToDB, getImageFromDB, deleteImageFromDB } from './storage';
+import { removeSurgicalImageCache } from '../components/SurgicalImage';
 import { FirestoreSyncService } from './firestoreSync';
 
 // Start clean with empty sets and instruments
@@ -202,9 +203,79 @@ export class SurgicalService {
   }
 
   static deleteInstrument(id: string): void {
+    const inst = this.getInstruments().find((i) => i.id === id);
+    if (inst) {
+      this.removeInstrumentImage(inst);
+    }
     const instruments = this.getInstruments().filter((i) => i.id !== id);
     this.saveInstruments(instruments);
     FirestoreSyncService.deleteSurgicalInstrument(id);
+  }
+
+  /**
+   * Completely purges an instrument's image from IndexedDB, in-memory cache, and records
+   */
+  static async removeInstrumentImage(instrument: SurgicalInstrument): Promise<void> {
+    const keysToDelete = [
+      `inst_${instrument.id}`,
+      `code_${instrument.code}`,
+      instrument.code,
+    ];
+    if (instrument.imageUrl && instrument.imageUrl.startsWith('idb://')) {
+      keysToDelete.push(instrument.imageUrl.replace('idb://', ''));
+    }
+
+    // 1. Purge from in-memory cache
+    keysToDelete.forEach((k) => removeSurgicalImageCache(k));
+
+    // 2. Purge from IndexedDB
+    for (const k of keysToDelete) {
+      await deleteImageFromDB(k);
+    }
+
+    // 3. Clear imageUrl from instrument record and save
+    instrument.imageUrl = undefined;
+    const instruments = this.getInstruments();
+    const idx = instruments.findIndex((i) => i.id === instrument.id);
+    if (idx >= 0) {
+      instruments[idx].imageUrl = undefined;
+      instruments[idx].updatedAt = new Date().toISOString();
+      this.saveInstruments(instruments);
+      FirestoreSyncService.syncSurgicalInstrument(instruments[idx]);
+    }
+  }
+
+  /**
+   * Completely purges a set cover image from IndexedDB, in-memory cache, and records
+   */
+  static async removeSetImage(set: SurgicalSet): Promise<void> {
+    const keysToDelete = [
+      `set_${set.id}`,
+      `set_code_${set.code}`,
+      set.code,
+    ];
+    if (set.imageUrl && set.imageUrl.startsWith('idb://')) {
+      keysToDelete.push(set.imageUrl.replace('idb://', ''));
+    }
+
+    // 1. Purge from in-memory cache
+    keysToDelete.forEach((k) => removeSurgicalImageCache(k));
+
+    // 2. Purge from IndexedDB
+    for (const k of keysToDelete) {
+      await deleteImageFromDB(k);
+    }
+
+    // 3. Clear imageUrl from set record and save
+    set.imageUrl = undefined;
+    const sets = this.getSets();
+    const idx = sets.findIndex((s) => s.id === set.id);
+    if (idx >= 0) {
+      sets[idx].imageUrl = undefined;
+      sets[idx].updatedAt = new Date().toISOString();
+      this.saveSets(sets);
+      FirestoreSyncService.syncSurgicalSet(sets[idx]);
+    }
   }
 
   // ==========================================

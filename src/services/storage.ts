@@ -165,6 +165,35 @@ export async function getImageFromDB(customId: string): Promise<string | null> {
   }
 }
 
+export async function deleteImageFromDB(customId: string): Promise<void> {
+  if (!customId) return;
+  try {
+    const db = await openImageDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      const store = tx.objectStore(IDB_STORE);
+      
+      const cleanKey = customId.trim().toLowerCase();
+      store.delete(cleanKey);
+
+      const rawKey = customId.trim();
+      if (rawKey !== cleanKey) {
+        store.delete(rawKey);
+      }
+
+      const normK = normKey(customId);
+      if (normK && normK !== cleanKey) {
+        store.delete(normK);
+      }
+
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  } catch {
+    // fallback
+  }
+}
+
 export async function clearImageDB(): Promise<void> {
   try {
     const db = await openImageDB();
