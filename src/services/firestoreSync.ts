@@ -60,8 +60,10 @@ export class FirestoreSyncService {
   private static isInitialized = false;
   private static quotaExceeded = false;
   private static quotaErrorMessage: string | null = null;
+  private static backendUnavailable = false;
   private static metaUnsubscriber: (() => void) | null = null;
   private static onDataChangedCallback: (() => void) | null = null;
+  private static statusListeners: Array<(status: { isQuota: boolean; isUnavailable: boolean; message: string | null }) => void> = [];
 
   // Track estimated reads saved
   private static sessionSavedReads = 0;
@@ -70,8 +72,40 @@ export class FirestoreSyncService {
     return this.quotaExceeded;
   }
 
+  static isBackendUnavailable(): boolean {
+    return this.backendUnavailable;
+  }
+
   static getQuotaErrorMessage(): string | null {
     return this.quotaErrorMessage;
+  }
+
+  static getQuotaUpgradeUrl(): string {
+    return 'https://console.firebase.google.com/project/virtual-ground-bdpgw/firestore/databases/ai-studio-assetsyncmainten-c86438fb-5892-4c4f-90fa-bb09ae52e5b2/data?openUpgradeDialog=true';
+  }
+
+  static onStatusChange(callback: (status: { isQuota: boolean; isUnavailable: boolean; message: string | null }) => void): () => void {
+    this.statusListeners.push(callback);
+    callback({
+      isQuota: this.quotaExceeded,
+      isUnavailable: this.backendUnavailable,
+      message: this.quotaErrorMessage,
+    });
+    return () => {
+      this.statusListeners = this.statusListeners.filter((cb) => cb !== callback);
+    };
+  }
+
+  private static notifyStatusChange() {
+    this.statusListeners.forEach((cb) => {
+      try {
+        cb({
+          isQuota: this.quotaExceeded,
+          isUnavailable: this.backendUnavailable,
+          message: this.quotaErrorMessage,
+        });
+      } catch {}
+    });
   }
 
   static getEstimatedSavedReads(): number {
@@ -100,6 +134,16 @@ export class FirestoreSyncService {
       this.quotaExceeded = true;
       this.quotaErrorMessage = errorStr;
       console.warn(`[Firestore Quota Exceeded]: ${context} - Working in local storage mode.`);
+      this.notifyStatusChange();
+    } else if (
+      errorStr.includes('unavailable') ||
+      errorStr.includes('the client is offline') ||
+      errorStr.includes('Could not reach Cloud Firestore backend') ||
+      error?.code === 'unavailable'
+    ) {
+      this.backendUnavailable = true;
+      console.warn(`[Firestore Connection Unavailable]: ${context} - Working in offline local storage mode.`);
+      this.notifyStatusChange();
     } else {
       console.error(`Firestore ${context} error:`, error);
     }
@@ -498,14 +542,21 @@ export class FirestoreSyncService {
     this.isInitialized = true;
 
     try {
+      if (this.quotaExceeded || this.backendUnavailable) {
+        return;
+      }
+
       const localAssetsStr = localStorage.getItem('asset_mgmt_assets');
       const localAssets: Asset[] = localAssetsStr ? JSON.parse(localAssetsStr) : [];
       const hasInitToken = localStorage.getItem(LOCAL_SYNC_STORAGE.INITIALIZED_FLAG);
 
       // If local assets are empty and never initialized on this device, pull all cloud data
-      if ((localAssets.length === 0 || !hasInitToken)) {
-        await this.pullAllCloudDataToLocal();
-        localStorage.setItem(LOCAL_SYNC_STORAGE.INITIALIZED_FLAG, 'true');
+      if (localAssets.length === 0 || !hasInitToken) {
+        localStorage.setItem(LOCAL_SYNC_STORAGE.INITIALIZED_FLAG, 'attempted');
+        const res = await this.pullAllCloudDataToLocal();
+        if (res.success) {
+          localStorage.setItem(LOCAL_SYNC_STORAGE.INITIALIZED_FLAG, 'true');
+        }
       } else {
         // Just record timestamp
         const lastTs = localStorage.getItem(LOCAL_SYNC_STORAGE.LAST_PROCESSED_TS);

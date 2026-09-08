@@ -21,12 +21,14 @@ interface SyncSettingsModalProps {
   currentUser?: User | null;
   onClose: () => void;
   onRefresh: () => void;
+  onOpenPending?: () => void;
 }
 
 export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
   currentUser,
   onClose,
   onRefresh,
+  onOpenPending,
 }) => {
   const isAdmin = currentUser?.role === 'admin';
 
@@ -224,6 +226,20 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
               <span className="font-semibold">حالة الربط السحابي:</span>
               <span className="text-emerald-700 font-bold">متصل ومزامن</span>
             </div>
+            {onOpenPending && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenPending();
+                }}
+                className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-lg font-bold transition-all text-[11px] flex items-center gap-1.5 shadow-2xs"
+                title="عرض تفاصيل العمليات المعلقة"
+              >
+                <span>{StorageService.getPendingSyncCount()} عملية معلقة</span>
+                <span className="text-amber-600">➔</span>
+              </button>
+            )}
           </div>
 
           {/* Action Buttons for Eco Sync */}

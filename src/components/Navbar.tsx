@@ -33,6 +33,7 @@ interface NavbarProps {
   onOpenHistory: () => void;
   onOpenReset: () => void;
   onOpenSyncSettings: () => void;
+  onOpenPending?: () => void;
   onLogout: () => void;
   ticketPendingCount: number;
 }
@@ -48,6 +49,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenHistory,
   onOpenReset,
   onOpenSyncSettings,
+  onOpenPending,
   onLogout,
   ticketPendingCount,
 }) => {
@@ -191,9 +193,17 @@ export const Navbar: React.FC<NavbarProps> = ({
           <div className="flex items-center gap-2 sm:gap-3">
             {/* Offline-First / Sync Indicator */}
             <div className="flex items-center gap-1.5">
-              <div
-                title={isOnline ? 'متصل بالشبكة (Online)' : 'يعمل بدون اتصال (Offline)'}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border ${
+              <button
+                type="button"
+                onClick={onOpenPending}
+                title={
+                  pendingCount > 0
+                    ? `اضغط لعرض تفاصيل ${pendingCount} عملية معلقة تنتظر المزامنة`
+                    : isOnline
+                    ? 'متصل بالشبكة (Online) - اضغط لعرض العمليات المعلقة'
+                    : 'يعمل بدون اتصال (Offline) - اضغط لعرض العمليات المعلقة'
+                }
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border transition-all cursor-pointer hover:brightness-115 active:scale-95 ${
                   isOnline
                     ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300'
                     : 'bg-amber-950/60 border-amber-500/40 text-amber-300'
@@ -211,11 +221,11 @@ export const Navbar: React.FC<NavbarProps> = ({
                   </>
                 )}
                 {pendingCount > 0 && (
-                  <span className="bg-amber-500 text-slate-950 px-1.5 py-0.2 rounded-full text-[10px] font-bold">
+                  <span className="bg-amber-500 hover:bg-amber-400 text-slate-950 px-2 py-0.2 rounded-full text-[10px] font-bold shadow-xs">
                     {pendingCount} معلق
                   </span>
                 )}
-              </div>
+              </button>
 
               {/* On-Demand Eco-Sync Button for ALL users */}
               <button

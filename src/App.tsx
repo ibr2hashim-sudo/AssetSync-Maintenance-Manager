@@ -15,6 +15,7 @@ import {
   UserCheck,
   AlertOctagon,
   Scissors,
+  WifiOff,
 } from 'lucide-react';
 import { Asset, MaintenanceTicket, PeriodicMaintenanceRecord, User } from './types';
 import { StorageService } from './services/storage';
@@ -29,6 +30,7 @@ import { AuditView } from './components/AuditView';
 import { SurgicalSetsView } from './components/SurgicalSetsView';
 import { UserManagementView } from './components/UserManagementView';
 import { SyncSettingsModal } from './components/SyncSettingsModal';
+import { PendingSyncModal } from './components/PendingSyncModal';
 import { HistoryModal } from './components/HistoryModal';
 import { FactoryResetModal } from './components/FactoryResetModal';
 
@@ -50,8 +52,17 @@ export default function App() {
 
   // Modal Triggers
   const [showSyncModal, setShowSyncModal] = useState(false);
+  const [showPendingSyncModal, setShowPendingSyncModal] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [showFactoryResetModal, setShowFactoryResetModal] = useState(false);
+
+  // Cloud & Firestore Connection Status
+  const [cloudStatus, setCloudStatus] = useState<{ isQuota: boolean; isUnavailable: boolean; message: string | null }>({
+    isQuota: FirestoreSyncService.isQuotaLimitReached(),
+    isUnavailable: FirestoreSyncService.isBackendUnavailable(),
+    message: FirestoreSyncService.getQuotaErrorMessage(),
+  });
+  const [dismissCloudAlert, setDismissCloudAlert] = useState<boolean>(false);
 
   // Cross-view action state (e.g. create ticket for specific asset)
   const [ticketTargetAsset, setTicketTargetAsset] = useState<Asset | null>(null);
@@ -75,6 +86,10 @@ export default function App() {
       reloadData();
     });
 
+    const unsubStatus = FirestoreSyncService.onStatusChange((status) => {
+      setCloudStatus(status);
+    });
+
     const handleOnline = () => {
       setIsOnline(true);
       // Trigger auto sync if configured
@@ -96,6 +111,7 @@ export default function App() {
     window.addEventListener('offline', handleOffline);
 
     return () => {
+      unsubStatus();
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
@@ -151,6 +167,7 @@ export default function App() {
         onOpenHistory={() => setShowHistoryModal(true)}
         onOpenReset={() => setShowFactoryResetModal(true)}
         onOpenSyncSettings={() => setShowSyncModal(true)}
+        onOpenPending={() => setShowPendingSyncModal(true)}
         onLogout={() => {
           StorageService.logout();
           reloadData();
@@ -167,6 +184,56 @@ export default function App() {
             <span>
               أنت مسجل كـ <strong>مشرف قسم</strong> على: <strong>{currentUser.assignedDepartment || 'غير محدد'}</strong> (عرض وتقديم بلاغات قسمك فقط).
             </span>
+          </div>
+        )}
+
+        {/* Cloud Status / Quota Banner */}
+        {cloudStatus.isQuota && !dismissCloudAlert && (
+          <div className="bg-amber-50 border border-amber-300 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs text-amber-900 shadow-xs">
+            <div className="flex items-start gap-2.5">
+              <AlertOctagon className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-bold text-amber-950 text-sm">
+                  تم استنفاد الحد اليومي المجاني لقاعدة بيانات فايربيس (Firestore Free Read Quota)
+                </p>
+                <p className="text-amber-800 mt-0.5 leading-relaxed">
+                  تتجدد الحصة السحابية يومياً، ويعمل التطبيق حالياً بأمان وكفاءة كاملة بنظام التخزين المحلي دون فقدان أي بيانات أو تعديلات.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+              <a
+                href={FirestoreSyncService.getQuotaUpgradeUrl()}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl transition-colors shadow-xs"
+              >
+                ترقية الحصة في Firebase
+              </a>
+              <button
+                onClick={() => setDismissCloudAlert(true)}
+                className="px-2.5 py-1.5 text-amber-700 hover:text-amber-900 font-medium hover:bg-amber-100 rounded-xl transition-colors"
+              >
+                إغلاق
+              </button>
+            </div>
+          </div>
+        )}
+
+        {cloudStatus.isUnavailable && !cloudStatus.isQuota && !dismissCloudAlert && (
+          <div className="bg-blue-50 border border-blue-200 rounded-2xl p-3 flex items-center justify-between gap-3 text-xs text-blue-900 shadow-xs">
+            <div className="flex items-center gap-2">
+              <WifiOff className="w-4 h-4 text-blue-600 shrink-0" />
+              <span>
+                يعمل النظام في <strong>وضع التخزين المحلي (Offline Mode)</strong> لعدم توفر خادم السحابة حالياً. جميع البيانات محفوظة محلياً.
+              </span>
+            </div>
+            <button
+              onClick={() => setDismissCloudAlert(true)}
+              className="px-2 py-1 text-blue-700 hover:text-blue-900 font-medium hover:bg-blue-100 rounded-lg transition-colors shrink-0"
+            >
+              إخفاء
+            </button>
           </div>
         )}
 
@@ -373,8 +440,21 @@ export default function App() {
           currentUser={currentUser}
           onClose={() => setShowSyncModal(false)}
           onRefresh={reloadData}
+          onOpenPending={() => setShowPendingSyncModal(true)}
         />
       )}
+
+      {/* Pending Sync Operations Modal */}
+      <PendingSyncModal
+        isOpen={showPendingSyncModal}
+        onClose={() => {
+          setShowPendingSyncModal(false);
+          reloadData();
+        }}
+        onSyncComplete={() => {
+          reloadData();
+        }}
+      />
 
       {/* History Log Modal (Admin only) */}
       {showHistoryModal && currentUser?.role === 'admin' && (

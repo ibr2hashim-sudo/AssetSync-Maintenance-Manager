@@ -1,0 +1,140 @@
+{
+  "entities": {
+    "Asset": {
+      "title": "Asset",
+      "description": "Hospital medical asset and equipment record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 200 },
+        "category": { "type": "string", "maxLength": 100 },
+        "department": { "type": "string", "maxLength": 100 },
+        "serialNumber": { "type": "string", "maxLength": 100 },
+        "status": { "type": "string", "maxLength": 50 },
+        "qrCode": { "type": "string", "maxLength": 256 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "name", "category", "department", "status"]
+    },
+    "MaintenanceTicket": {
+      "title": "MaintenanceTicket",
+      "description": "Corrective maintenance work order ticket",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "ticketNumber": { "type": "string", "maxLength": 64 },
+        "assetId": { "type": "string", "maxLength": 128 },
+        "status": { "type": "string", "maxLength": 50 },
+        "priority": { "type": "string", "maxLength": 50 },
+        "description": { "type": "string", "maxLength": 1000 },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "ticketNumber", "assetId", "status"]
+    },
+    "PeriodicMaintenanceRecord": {
+      "title": "PeriodicMaintenanceRecord",
+      "description": "Preventive periodic maintenance check record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "assetId": { "type": "string", "maxLength": 128 },
+        "status": { "type": "string", "maxLength": 50 },
+        "scheduledDate": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "assetId", "status"]
+    },
+    "AuditSession": {
+      "title": "AuditSession",
+      "description": "Physical inventory audit scanning session",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "sessionNumber": { "type": "string", "maxLength": 64 },
+        "department": { "type": "string", "maxLength": 100 },
+        "status": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["id", "sessionNumber", "department", "status"]
+    },
+    "User": {
+      "title": "User",
+      "description": "System user profile and credentials",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "username": { "type": "string", "maxLength": 100 },
+        "role": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["id", "username", "role"]
+    },
+    "SurgicalSet": {
+      "title": "SurgicalSet",
+      "description": "Operating room surgical instrument tray set",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 200 },
+        "code": { "type": "string", "maxLength": 100 },
+        "specialty": { "type": "string", "maxLength": 100 },
+        "status": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["id", "name", "code", "specialty", "status"]
+    },
+    "SurgicalInstrument": {
+      "title": "SurgicalInstrument",
+      "description": "Individual surgical instrument within a set",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "setId": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 200 },
+        "code": { "type": "string", "maxLength": 100 },
+        "status": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["id", "setId", "name", "code", "status"]
+    },
+    "SyncMeta": {
+      "title": "SyncMeta",
+      "description": "Real-time sync heartbeat and changes delta",
+      "type": "object",
+      "properties": {
+        "version": { "type": "number" },
+        "lastUpdated": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["version"]
+    }
+  },
+  "firestore": {
+    "/assets/{assetId}": {
+      "schema": "Asset",
+      "description": "Hospital medical asset documents"
+    },
+    "/tickets/{ticketId}": {
+      "schema": "MaintenanceTicket",
+      "description": "Corrective maintenance ticket documents"
+    },
+    "/periodic_records/{recordId}": {
+      "schema": "PeriodicMaintenanceRecord",
+      "description": "Periodic preventive maintenance checks"
+    },
+    "/audit_sessions/{sessionId}": {
+      "schema": "AuditSession",
+      "description": "Physical inventory audit sessions"
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "System user profiles"
+    },
+    "/surgical_sets/{setId}": {
+      "schema": "SurgicalSet",
+      "description": "Surgical sets and trays"
+    },
+    "/surgical_instruments/{instrumentId}": {
+      "schema": "SurgicalInstrument",
+      "description": "Surgical instruments belonging to sets"
+    },
+    "/settings/{settingId}": {
+      "schema": "SyncMeta",
+      "description": "Global sync metadata and settings"
+    }
+  }
+}
