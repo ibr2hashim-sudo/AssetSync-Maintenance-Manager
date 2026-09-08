@@ -19,6 +19,15 @@ export function removeSurgicalImageCache(key: string) {
   if (!key) return;
   const k = key.trim().toLowerCase();
   surgicalImageCache.delete(k);
+  surgicalImageCache.delete(key.trim());
+}
+
+export function purgeSurgicalImageCacheKeys(keys: string[]) {
+  keys.forEach((k) => {
+    if (!k) return;
+    surgicalImageCache.delete(k.trim().toLowerCase());
+    surgicalImageCache.delete(k.trim());
+  });
 }
 
 export function clearSurgicalImageCache() {
@@ -26,7 +35,8 @@ export function clearSurgicalImageCache() {
 }
 
 /**
- * Resolves a surgical item image (instrument or set) from memory, data URI, or IndexedDB
+ * Resolves a surgical item image (instrument or set) from memory, data URI, or IndexedDB.
+ * Returns null immediately if the item has no image specified.
  */
 export async function resolveSurgicalImageUrl(item: {
   imageUrl?: string | null;
@@ -36,16 +46,26 @@ export async function resolveSurgicalImageUrl(item: {
 }): Promise<string | null> {
   const { imageUrl, code, id } = item;
 
-  // 1. Direct valid URL
-  if (imageUrl && (imageUrl.startsWith('data:') || imageUrl.startsWith('http') || imageUrl.startsWith('blob:'))) {
+  // Strict check: If item has NO imageUrl specified, it has NO image!
+  // Never guess, search, or resurrect images for items without an image reference!
+  if (!imageUrl || imageUrl.trim() === '') {
+    return null;
+  }
+
+  // 1. Direct valid URL (base64, http, blob)
+  if (imageUrl.startsWith('data:') || imageUrl.startsWith('http') || imageUrl.startsWith('blob:')) {
     return imageUrl;
   }
 
-  // 2. Candidate keys
+  // 2. Resolve from IndexedDB / in-memory cache ONLY when an idb:// reference is present
   const keys: string[] = [];
-  if (imageUrl && imageUrl.startsWith('idb://')) {
-    keys.push(imageUrl.replace('idb://', ''));
+  if (imageUrl.startsWith('idb://')) {
+    const rawKey = imageUrl.replace('idb://', '').trim();
+    if (rawKey) keys.push(rawKey);
+  } else {
+    keys.push(imageUrl.trim());
   }
+
   if (id) keys.push(`inst_${id}`);
   if (code) {
     keys.push(`code_${code}`);
@@ -105,11 +125,16 @@ export const SurgicalImage: React.FC<SurgicalImageProps> = ({
   onResolved,
 }) => {
   const [resolvedSrc, setResolvedSrc] = useState<string | null>(() => {
-    if (src && (src.startsWith('data:') || src.startsWith('http') || src.startsWith('blob:'))) {
+    // If NO src, this item has NO image! Return null immediately.
+    if (!src || src.trim() === '') {
+      return null;
+    }
+    if (src.startsWith('data:') || src.startsWith('http') || src.startsWith('blob:')) {
       return src;
     }
+    const targetKey = src.startsWith('idb://') ? src.replace('idb://', '').trim() : src.trim();
     const candidateKeys = [
-      src?.replace('idb://', ''),
+      targetKey,
       instrumentId ? `inst_${instrumentId}` : '',
       code ? `code_${code}` : '',
       code,
@@ -123,21 +148,32 @@ export const SurgicalImage: React.FC<SurgicalImageProps> = ({
     return null;
   });
 
-  const [isLoading, setIsLoading] = useState(!resolvedSrc);
+  const [isLoading, setIsLoading] = useState(() => {
+    if (!src || src.trim() === '') return false;
+    return !resolvedSrc;
+  });
 
   useEffect(() => {
     let isMounted = true;
 
+    // If NO src or empty, immediately clear and stop loading
+    if (!src || src.trim() === '') {
+      setResolvedSrc(null);
+      setIsLoading(false);
+      return;
+    }
+
     // If direct URI
-    if (src && (src.startsWith('data:') || src.startsWith('http') || src.startsWith('blob:'))) {
+    if (src.startsWith('data:') || src.startsWith('http') || src.startsWith('blob:')) {
       setResolvedSrc(src);
       setIsLoading(false);
       onResolved?.(src);
       return;
     }
 
+    const targetKey = src.startsWith('idb://') ? src.replace('idb://', '').trim() : src.trim();
     const candidateKeys = [
-      src?.replace('idb://', ''),
+      targetKey,
       instrumentId ? `inst_${instrumentId}` : '',
       code ? `code_${code}` : '',
       code,

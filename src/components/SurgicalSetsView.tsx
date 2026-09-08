@@ -398,6 +398,38 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
     }
   };
 
+  // Open Edit Instrument Modal with properly resolved image
+  const openEditInstModal = async (inst: SurgicalInstrument) => {
+    setEditingInst(inst);
+    if (inst.imageUrl) {
+      const resolved = await resolveSurgicalImageUrl({
+        imageUrl: inst.imageUrl,
+        code: inst.code,
+        id: inst.id,
+      });
+      setInstModalImageUrl(resolved || null);
+    } else {
+      setInstModalImageUrl(null);
+    }
+    setShowAddInstModal(true);
+  };
+
+  // Open Edit Set Modal with properly resolved image
+  const openEditSetModal = async (set: SurgicalSet) => {
+    setEditingSet(set);
+    if (set.imageUrl) {
+      const resolved = await resolveSurgicalImageUrl({
+        imageUrl: set.imageUrl,
+        setId: set.id,
+        code: set.code,
+      });
+      setSetModalImageUrl(resolved || null);
+    } else {
+      setSetModalImageUrl(null);
+    }
+    setShowAddSetModal(true);
+  };
+
   // Handle Single Image Upload
   const handleSingleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -942,11 +974,7 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                         {currentUser?.role !== 'supervisor' && (
                           <>
                             <button
-                              onClick={() => {
-                                setEditingSet(set);
-                                setSetModalImageUrl(set.imageUrl || null);
-                                setShowAddSetModal(true);
-                              }}
+                              onClick={() => openEditSetModal(set)}
                               title="تعديل بيانات السيت"
                               className="p-2 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 transition-colors"
                             >
@@ -1330,11 +1358,7 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                             {currentUser?.role !== 'supervisor' && (
                               <>
                                 <button
-                                  onClick={() => {
-                                    setEditingInst(inst);
-                                    setInstModalImageUrl(inst.imageUrl || null);
-                                    setShowAddInstModal(true);
-                                  }}
+                                  onClick={() => openEditInstModal(inst)}
                                   className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-700 transition-colors"
                                   title="تعديل الأداة"
                                 >
@@ -1482,11 +1506,7 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                     </div>
                     {currentUser?.role !== 'supervisor' && (
                       <button
-                        onClick={() => {
-                          setEditingInst(inst);
-                          setInstModalImageUrl(inst.imageUrl || null);
-                          setShowAddInstModal(true);
-                        }}
+                        onClick={() => openEditInstModal(inst)}
                         className="text-slate-600 hover:text-slate-900 text-[10px]"
                       >
                         تعديل
@@ -1827,7 +1847,7 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
             </div>
 
             <form
-              onSubmit={(e) => {
+              onSubmit={async (e) => {
                 e.preventDefault();
                 const formData = new FormData(e.currentTarget);
                 const name = formData.get('name') as string;
@@ -1843,6 +1863,10 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                   return;
                 }
 
+                if (editingSet && !setModalImageUrl) {
+                  await SurgicalService.removeSetImage(editingSet);
+                }
+
                 const newSet: SurgicalSet = {
                   id: editingSet ? editingSet.id : `set-${Date.now()}`,
                   name,
@@ -1852,13 +1876,16 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                   trayNumber,
                   status,
                   notes,
-                  imageUrl: setModalImageUrl ?? editingSet?.imageUrl,
+                  imageUrl: setModalImageUrl || undefined,
                   instrumentsCount: editingSet?.instrumentsCount || 0,
                   createdAt: editingSet?.createdAt || new Date().toISOString(),
                   updatedAt: new Date().toISOString(),
                 };
 
                 SurgicalService.saveSet(newSet);
+                if (activeSet && activeSet.id === newSet.id) {
+                  setActiveSet(newSet);
+                }
                 loadData();
                 setShowAddSetModal(false);
               }}
@@ -2049,8 +2076,17 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                 }
 
                 // Check if user explicitly removed the image
-                if (editingInst && !instModalImageUrl && editingInst.imageUrl) {
+                if (editingInst && !instModalImageUrl) {
                   await SurgicalService.removeInstrumentImage(editingInst);
+                }
+
+                let finalImageUrl: string | undefined = undefined;
+                if (instModalImageUrl) {
+                  if (instModalImageUrl.startsWith('data:')) {
+                    finalImageUrl = instModalImageUrl;
+                  } else {
+                    finalImageUrl = editingInst?.imageUrl || instModalImageUrl;
+                  }
                 }
 
                 const newInst: SurgicalInstrument = {
@@ -2065,11 +2101,11 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                   actualQuantity,
                   status,
                   notes,
-                  imageUrl: instModalImageUrl || undefined,
+                  imageUrl: finalImageUrl,
                   updatedAt: new Date().toISOString(),
                 };
 
-                SurgicalService.saveInstrument(newInst);
+                await SurgicalService.saveInstrument(newInst);
                 loadData();
                 setShowAddInstModal(false);
               }}

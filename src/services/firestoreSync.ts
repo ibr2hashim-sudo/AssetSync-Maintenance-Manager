@@ -19,7 +19,8 @@ import {
   SurgicalSet,
   SurgicalInstrument,
 } from '../types';
-import { saveImageToDB } from './storage';
+import { saveImageToDB, deleteImageFromDB } from './storage';
+import { removeSurgicalImageCache } from '../components/SurgicalImage';
 
 function cleanForFirestore<T>(obj: T): T {
   return JSON.parse(JSON.stringify(obj, (_, v) => (v === undefined ? null : v)));
@@ -429,6 +430,15 @@ export class FirestoreSyncService {
               await saveImageToDB(`inst_${remoteInst.id}`, remoteInst.imageUrl);
               await saveImageToDB(`code_${remoteInst.code}`, remoteInst.imageUrl);
             } catch {}
+          } else {
+            try {
+              await deleteImageFromDB(`inst_${remoteInst.id}`);
+              await deleteImageFromDB(`code_${remoteInst.code}`);
+              await deleteImageFromDB(remoteInst.code);
+              removeSurgicalImageCache(`inst_${remoteInst.id}`);
+              removeSurgicalImageCache(`code_${remoteInst.code}`);
+              removeSurgicalImageCache(remoteInst.code);
+            } catch {}
           }
 
           return true;
@@ -600,6 +610,13 @@ export class FirestoreSyncService {
           if (inst.imageUrl) {
             saveImageToDB(`inst_${inst.id}`, inst.imageUrl).catch(() => {});
             saveImageToDB(`code_${inst.code}`, inst.imageUrl).catch(() => {});
+          } else {
+            deleteImageFromDB(`inst_${inst.id}`).catch(() => {});
+            deleteImageFromDB(`code_${inst.code}`).catch(() => {});
+            deleteImageFromDB(inst.code).catch(() => {});
+            removeSurgicalImageCache(`inst_${inst.id}`);
+            removeSurgicalImageCache(`code_${inst.code}`);
+            removeSurgicalImageCache(inst.code);
           }
         });
         localStorage.setItem('asset_mgmt_surgical_instruments', JSON.stringify(remoteInsts));

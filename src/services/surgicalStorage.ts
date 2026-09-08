@@ -170,36 +170,11 @@ export class SurgicalService {
   }
 
   /**
-   * Scans instruments for missing image references and recovers them if present in IndexedDB
+   * Scans instruments for missing image references.
+   * Note: Does not resurrect images for items where the image was deliberately removed.
    */
   static async syncAndRecoverInstrumentImages(): Promise<number> {
-    const instruments = this.getInstruments();
-    let recoveredCount = 0;
-    let changed = false;
-
-    for (const inst of instruments) {
-      if (!inst.imageUrl || inst.imageUrl.trim() === '') {
-        const checkKeys = [`code_${inst.code}`, `inst_${inst.id}`, inst.code];
-        for (const k of checkKeys) {
-          try {
-            const dbData = await getImageFromDB(k);
-            if (dbData) {
-              inst.imageUrl = `idb://${inst.code}`;
-              recoveredCount++;
-              changed = true;
-              break;
-            }
-          } catch {
-            // continue
-          }
-        }
-      }
-    }
-
-    if (changed) {
-      this.saveInstruments(instruments);
-    }
-    return recoveredCount;
+    return 0;
   }
 
   static deleteInstrument(id: string): void {
@@ -216,21 +191,28 @@ export class SurgicalService {
    * Completely purges an instrument's image from IndexedDB, in-memory cache, and records
    */
   static async removeInstrumentImage(instrument: SurgicalInstrument): Promise<void> {
-    const keysToDelete = [
+    const keysToDelete: string[] = [
       `inst_${instrument.id}`,
       `code_${instrument.code}`,
       instrument.code,
+      instrument.id,
     ];
     if (instrument.imageUrl && instrument.imageUrl.startsWith('idb://')) {
-      keysToDelete.push(instrument.imageUrl.replace('idb://', ''));
+      keysToDelete.push(instrument.imageUrl.replace('idb://', '').trim());
     }
 
     // 1. Purge from in-memory cache
-    keysToDelete.forEach((k) => removeSurgicalImageCache(k));
+    keysToDelete.forEach((k) => {
+      removeSurgicalImageCache(k);
+      removeSurgicalImageCache(k.toLowerCase());
+      removeSurgicalImageCache(k.toUpperCase());
+    });
 
     // 2. Purge from IndexedDB
     for (const k of keysToDelete) {
       await deleteImageFromDB(k);
+      await deleteImageFromDB(k.toLowerCase());
+      await deleteImageFromDB(k.toUpperCase());
     }
 
     // 3. Clear imageUrl from instrument record and save
@@ -249,23 +231,32 @@ export class SurgicalService {
    * Completely purges a set cover image from IndexedDB, in-memory cache, and records
    */
   static async removeSetImage(set: SurgicalSet): Promise<void> {
-    const keysToDelete = [
+    const keysToDelete: string[] = [
       `set_${set.id}`,
       `set_code_${set.code}`,
       set.code,
+      set.id,
     ];
     if (set.imageUrl && set.imageUrl.startsWith('idb://')) {
-      keysToDelete.push(set.imageUrl.replace('idb://', ''));
+      keysToDelete.push(set.imageUrl.replace('idb://', '').trim());
     }
 
     // 1. Purge from in-memory cache
-    keysToDelete.forEach((k) => removeSurgicalImageCache(k));
+    keysToDelete.forEach((k) => {
+      removeSurgicalImageCache(k);
+      removeSurgicalImageCache(k.toLowerCase());
+      removeSurgicalImageCache(k.toUpperCase());
+    });
 
     // 2. Purge from IndexedDB
     for (const k of keysToDelete) {
       await deleteImageFromDB(k);
+      await deleteImageFromDB(k.toLowerCase());
+      await deleteImageFromDB(k.toUpperCase());
     }
 
+    // 3. Clear imageUrl from set record and save
+    set.imageUrl = undefined;
     // 3. Clear imageUrl from set record and save
     set.imageUrl = undefined;
     const sets = this.getSets();
