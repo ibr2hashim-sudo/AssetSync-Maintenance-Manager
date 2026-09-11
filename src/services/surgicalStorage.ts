@@ -29,7 +29,25 @@ function setItem<T>(key: string, value: T): void {
   try {
     localStorage.setItem(key, JSON.stringify(value));
   } catch (err) {
-    console.error(`Error writing ${key}:`, err);
+    console.warn(`Initial write to ${key} failed, attempting quota reduction:`, err);
+    // If quota exceeded and value is an array, ensure all large imageUrl strings are stored in IndexedDB
+    if (Array.isArray(value)) {
+      try {
+        const lightweight = value.map((item: any) => {
+          if (item && item.imageUrl && (item.imageUrl.startsWith('data:') || item.imageUrl.length > 250)) {
+            const idbKey = item.code || item.id || `img_${Date.now()}`;
+            saveImageToDB(idbKey, item.imageUrl).catch(() => {});
+            return { ...item, imageUrl: `idb://${idbKey}` };
+          }
+          return item;
+        });
+        localStorage.setItem(key, JSON.stringify(lightweight));
+      } catch (innerErr) {
+        console.error(`Critical: Failed writing ${key} even after image reduction:`, innerErr);
+      }
+    } else {
+      console.error(`Error writing ${key}:`, err);
+    }
   }
 }
 

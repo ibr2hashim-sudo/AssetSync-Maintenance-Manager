@@ -581,8 +581,8 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
 
         {/* Action Buttons in Hero */}
         <div className="flex flex-wrap items-center gap-2.5 z-10 w-full md:w-auto justify-end">
-          {/* Add Set */}
-          {currentUser?.role !== 'supervisor' && (
+          {/* Add Set (Admin Only) */}
+          {isAdmin && (
             <button
               onClick={() => {
                 setEditingSet(null);
@@ -596,40 +596,46 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
             </button>
           )}
 
-          {/* Import Excel */}
-          <button
-            onClick={() => excelFileInputRef.current?.click()}
-            className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-emerald-600/90 hover:bg-emerald-600 text-white text-xs font-bold shadow-md transition-all cursor-pointer"
-            title="استيراد سيت من جدول إكسل بنفس تنسيق نموذج الجرد"
-          >
-            <FileSpreadsheet className="w-4 h-4" />
-            <span>استيراد إكسل</span>
-          </button>
+          {/* Import Excel (Admin Only) */}
+          {isAdmin && (
+            <button
+              onClick={() => excelFileInputRef.current?.click()}
+              className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-emerald-600/90 hover:bg-emerald-600 text-white text-xs font-bold shadow-md transition-all cursor-pointer"
+              title="استيراد سيت من جدول إكسل بنفس تنسيق نموذج الجرد"
+            >
+              <FileSpreadsheet className="w-4 h-4" />
+              <span>استيراد إكسل</span>
+            </button>
+          )}
 
-          {/* Batch Image Import */}
-          <button
-            onClick={() => {
-              setBatchImageTargetSetId(undefined);
-              batchImageInputRef.current?.click();
-            }}
-            disabled={isProcessingImages}
-            className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-indigo-600/90 hover:bg-indigo-600 text-white text-xs font-bold shadow-md transition-all cursor-pointer"
-            title="استيراد صور الأدوات ومطابقتها تلقائياً مع الأكواد (مثل OB-1.jpg)"
-          >
-            <UploadCloud className="w-4 h-4" />
-            <span>{isProcessingImages ? 'جارِ المعالجة...' : 'استيراد صور'}</span>
-          </button>
+          {/* Batch Image Import (Admin Only) */}
+          {isAdmin && (
+            <button
+              onClick={() => {
+                setBatchImageTargetSetId(undefined);
+                batchImageInputRef.current?.click();
+              }}
+              disabled={isProcessingImages}
+              className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-indigo-600/90 hover:bg-indigo-600 text-white text-xs font-bold shadow-md transition-all cursor-pointer"
+              title="استيراد صور الأدوات ومطابقتها تلقائياً مع الأكواد (مثل OB-1.jpg)"
+            >
+              <UploadCloud className="w-4 h-4" />
+              <span>{isProcessingImages ? 'جارِ المعالجة...' : 'استيراد صور'}</span>
+            </button>
+          )}
 
-          {/* Batch Image Export ZIP */}
-          <button
-            onClick={() => handleExportImagesZip()}
-            disabled={isExportingZip || metrics.totalImagesCount === 0}
-            className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold shadow-sm transition-all cursor-pointer disabled:opacity-50"
-            title="تصدير جميع صور الأدوات في ملف مضغوط ZIP"
-          >
-            <FolderArchive className="w-4 h-4 text-amber-400" />
-            <span>{isExportingZip ? 'جارِ الضغط...' : 'تصدير الصور (ZIP)'}</span>
-          </button>
+          {/* Batch Image Export ZIP (Admin Only) */}
+          {isAdmin && (
+            <button
+              onClick={() => handleExportImagesZip()}
+              disabled={isExportingZip || metrics.totalImagesCount === 0}
+              className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold shadow-sm transition-all cursor-pointer disabled:opacity-50"
+              title="تصدير جميع صور الأدوات في ملف مضغوط ZIP"
+            >
+              <FolderArchive className="w-4 h-4 text-amber-400" />
+              <span>{isExportingZip ? 'جارِ الضغط...' : 'تصدير الصور (ZIP)'}</span>
+            </button>
+          )}
 
           {/* Instrument Aggregated Stats Button (Admin & Technicians only) */}
           {canViewStats && (
@@ -821,24 +827,26 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
               <p className="text-xs text-slate-500 max-w-md mx-auto">
                 يمكنك إضافة سيت جراحي جديد يدوياً، أو استيراد ملف الإكسل الخاص بقائمة محتويات السيتات مباشرة.
               </p>
-              <div className="pt-2 flex items-center justify-center gap-2">
-                <button
-                  onClick={() => {
-                    setEditingSet(null);
-                    setSetModalImageUrl(null);
-                    setShowAddSetModal(true);
-                  }}
-                  className="px-4 py-2 rounded-xl bg-blue-600 text-white text-xs font-bold"
-                >
-                  إضافة سيت جديد
-                </button>
-                <button
-                  onClick={() => excelFileInputRef.current?.click()}
-                  className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold"
-                >
-                  استيراد من إكسل
-                </button>
-              </div>
+              {isAdmin && (
+                <div className="pt-2 flex items-center justify-center gap-2">
+                  <button
+                    onClick={() => {
+                      setEditingSet(null);
+                      setSetModalImageUrl(null);
+                      setShowAddSetModal(true);
+                    }}
+                    className="px-4 py-2 rounded-xl bg-blue-600 text-white text-xs font-bold"
+                  >
+                    إضافة سيت جديد
+                  </button>
+                  <button
+                    onClick={() => excelFileInputRef.current?.click()}
+                    className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold"
+                  >
+                    استيراد من إكسل
+                  </button>
+                </div>
+              )}
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -942,59 +950,57 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                         <span>فتح السيت والأدوات ({count})</span>
                       </button>
 
-                      {/* Quick Dropdown / Actions */}
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={() => {
-                            setTargetSetForImage(set);
-                            setCoverInputRef.current?.click();
-                          }}
-                          title="تغيير أو اختيار صورة غلاف السيت"
-                          className="p-2 rounded-xl bg-white hover:bg-blue-50 text-blue-600 border border-slate-200 transition-colors"
-                        >
-                          <Camera className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => {
-                            setBatchImageTargetSetId(set.id);
-                            batchImageInputRef.current?.click();
-                          }}
-                          title="استيراد صور أدوات هذا السيت دفعة واحدة (مطابقة بالأكواد)"
-                          className="p-2 rounded-xl bg-white hover:bg-indigo-50 text-indigo-600 border border-slate-200 transition-colors"
-                        >
-                          <UploadCloud className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => SurgicalService.exportSetToExcel(set.id)}
-                          title="تصدير جدول محتويات السيت إلى Excel"
-                          className="p-2 rounded-xl bg-white hover:bg-emerald-50 text-emerald-600 border border-slate-200 transition-colors"
-                        >
-                          <FileSpreadsheet className="w-4 h-4" />
-                        </button>
-                        {currentUser?.role !== 'supervisor' && (
-                          <>
-                            <button
-                              onClick={() => openEditSetModal(set)}
-                              title="تعديل بيانات السيت"
-                              className="p-2 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 transition-colors"
-                            >
-                              <Edit className="w-4 h-4" />
-                            </button>
-                            <button
-                              onClick={() => {
-                                if (confirm(`هل أنت متأكد من حذف سيت (${set.name}) وجميع أدواته؟`)) {
-                                  SurgicalService.deleteSet(set.id);
-                                  loadData();
-                                }
-                              }}
-                              title="حذف السيت"
-                              className="p-2 rounded-xl bg-white hover:bg-rose-50 text-rose-600 border border-slate-200 transition-colors"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </>
-                        )}
-                      </div>
+                      {/* Quick Dropdown / Actions (Admin Only) */}
+                      {isAdmin && (
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => {
+                              setTargetSetForImage(set);
+                              setCoverInputRef.current?.click();
+                            }}
+                            title="تغيير أو اختيار صورة غلاف السيت"
+                            className="p-2 rounded-xl bg-white hover:bg-blue-50 text-blue-600 border border-slate-200 transition-colors cursor-pointer"
+                          >
+                            <Camera className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => {
+                              setBatchImageTargetSetId(set.id);
+                              batchImageInputRef.current?.click();
+                            }}
+                            title="استيراد صور أدوات هذا السيت دفعة واحدة (مطابقة بالأكواد)"
+                            className="p-2 rounded-xl bg-white hover:bg-indigo-50 text-indigo-600 border border-slate-200 transition-colors cursor-pointer"
+                          >
+                            <UploadCloud className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => SurgicalService.exportSetToExcel(set.id)}
+                            title="تصدير جدول محتويات السيت إلى Excel"
+                            className="p-2 rounded-xl bg-white hover:bg-emerald-50 text-emerald-600 border border-slate-200 transition-colors cursor-pointer"
+                          >
+                            <FileSpreadsheet className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => openEditSetModal(set)}
+                            title="تعديل بيانات السيت"
+                            className="p-2 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 transition-colors cursor-pointer"
+                          >
+                            <Edit className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (confirm(`هل أنت متأكد من حذف سيت (${set.name}) وجميع أدواته؟`)) {
+                                SurgicalService.deleteSet(set.id);
+                                loadData();
+                              }
+                            }}
+                            title="حذف السيت"
+                            className="p-2 rounded-xl bg-white hover:bg-rose-50 text-rose-600 border border-slate-200 transition-colors cursor-pointer"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
                 );
@@ -1113,53 +1119,56 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                 <span>جرد وفحص السيت</span>
               </button>
 
-              {/* Batch Images for this set */}
-              <button
-                onClick={() => {
-                  setBatchImageTargetSetId(activeSet.id);
-                  batchImageInputRef.current?.click();
-                }}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-xs transition-colors"
-                title="استيراد صور للأدوات داخل هذا السيت ومطابقتها بأكواد الأدوات"
-              >
-                <UploadCloud className="w-4 h-4" />
-                <span>استيراد صور أدوات السيت (بالكود)</span>
-              </button>
+              {/* Admin Actions inside Active Set */}
+              {isAdmin && (
+                <>
+                  {/* Batch Images for this set */}
+                  <button
+                    onClick={() => {
+                      setBatchImageTargetSetId(activeSet.id);
+                      batchImageInputRef.current?.click();
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-xs transition-colors cursor-pointer"
+                    title="استيراد صور للأدوات داخل هذا السيت ومطابقتها بأكواد الأدوات"
+                  >
+                    <UploadCloud className="w-4 h-4" />
+                    <span>استيراد صور أدوات السيت (بالكود)</span>
+                  </button>
 
-              {/* Export ZIP of this set */}
-              <button
-                onClick={() => handleExportImagesZip(activeSet.id)}
-                disabled={isExportingZip}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold shadow-xs transition-colors"
-                title="تصدير كافة صور هذا السيت في ملف مضغوط"
-              >
-                <FolderArchive className="w-4 h-4 text-amber-400" />
-                <span>تصدير الصور (ZIP)</span>
-              </button>
+                  {/* Export ZIP of this set */}
+                  <button
+                    onClick={() => handleExportImagesZip(activeSet.id)}
+                    disabled={isExportingZip}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold shadow-xs transition-colors cursor-pointer disabled:opacity-50"
+                    title="تصدير كافة صور هذا السيت في ملف مضغوط"
+                  >
+                    <FolderArchive className="w-4 h-4 text-amber-400" />
+                    <span>تصدير الصور (ZIP)</span>
+                  </button>
 
-              {/* Export Excel for this set */}
-              <button
-                onClick={() => SurgicalService.exportSetToExcel(activeSet.id)}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-bold transition-colors"
-                title="تصدير جدول محتويات السيت إلى Excel"
-              >
-                <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
-                <span>تصدير Excel</span>
-              </button>
+                  {/* Export Excel for this set */}
+                  <button
+                    onClick={() => SurgicalService.exportSetToExcel(activeSet.id)}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-bold transition-colors cursor-pointer"
+                    title="تصدير جدول محتويات السيت إلى Excel"
+                  >
+                    <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+                    <span>تصدير Excel</span>
+                  </button>
 
-              {/* Add Instrument */}
-              {currentUser?.role !== 'supervisor' && (
-                <button
-                  onClick={() => {
-                    setEditingInst(null);
-                    setInstModalImageUrl(null);
-                    setShowAddInstModal(true);
-                  }}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-xs transition-colors"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>إضافة أداة</span>
-                </button>
+                  {/* Add Instrument */}
+                  <button
+                    onClick={() => {
+                      setEditingInst(null);
+                      setInstModalImageUrl(null);
+                      setShowAddInstModal(true);
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-xs transition-colors cursor-pointer"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>إضافة أداة</span>
+                  </button>
+                </>
               )}
             </div>
           </div>
@@ -1342,43 +1351,43 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                           {inst.notes || '—'}
                         </td>
 
-                        {/* Actions */}
+                        {/* Actions (Admin Only) */}
                         <td className="p-3 whitespace-nowrap text-center">
-                          <div className="flex items-center justify-center gap-1">
-                            <button
-                              onClick={() => {
-                                setTargetInstForImage(inst);
-                                singleImageInputRef.current?.click();
-                              }}
-                              className="p-1.5 rounded-lg hover:bg-blue-50 text-blue-600 transition-colors"
-                              title="تغيير / رفع صورة"
-                            >
-                              <Camera className="w-3.5 h-3.5" />
-                            </button>
-                            {currentUser?.role !== 'supervisor' && (
-                              <>
-                                <button
-                                  onClick={() => openEditInstModal(inst)}
-                                  className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-700 transition-colors"
-                                  title="تعديل الأداة"
-                                >
-                                  <Edit className="w-3.5 h-3.5" />
-                                </button>
-                                <button
-                                  onClick={() => {
-                                    if (confirm(`حذف أداة (${inst.code} - ${inst.name})؟`)) {
-                                      SurgicalService.deleteInstrument(inst.id);
-                                      loadData();
-                                    }
-                                  }}
-                                  className="p-1.5 rounded-lg hover:bg-rose-50 text-rose-600 transition-colors"
-                                  title="حذف الأداة"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
-                              </>
-                            )}
-                          </div>
+                          {isAdmin ? (
+                            <div className="flex items-center justify-center gap-1">
+                              <button
+                                onClick={() => {
+                                  setTargetInstForImage(inst);
+                                  singleImageInputRef.current?.click();
+                                }}
+                                className="p-1.5 rounded-lg hover:bg-blue-50 text-blue-600 transition-colors cursor-pointer"
+                                title="تغيير / رفع صورة"
+                              >
+                                <Camera className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => openEditInstModal(inst)}
+                                className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-700 transition-colors cursor-pointer"
+                                title="تعديل الأداة"
+                              >
+                                <Edit className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => {
+                                  if (confirm(`حذف أداة (${inst.code} - ${inst.name})؟`)) {
+                                    SurgicalService.deleteInstrument(inst.id);
+                                    loadData();
+                                  }
+                                }}
+                                className="p-1.5 rounded-lg hover:bg-rose-50 text-rose-600 transition-colors cursor-pointer"
+                                title="حذف الأداة"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-slate-400 font-mono">—</span>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -1480,39 +1489,39 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
                   </div>
 
                   {/* Footer buttons */}
-                  <div className="px-3 py-2 bg-slate-50 border-t border-slate-100 flex items-center justify-between text-xs">
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => {
-                          setTargetInstForImage(inst);
-                          singleImageInputRef.current?.click();
-                        }}
-                        className="text-blue-600 hover:underline font-bold text-[10px]"
-                      >
-                        تغيير الصورة
-                      </button>
-                      <button
-                        onClick={async () => {
-                          if (confirm(`هل أنت متأكد من حذف صورة الأداة (${inst.code} - ${inst.name})؟`)) {
-                            await SurgicalService.removeInstrumentImage(inst);
-                            loadData();
-                          }
-                        }}
-                        className="text-rose-600 hover:underline font-bold text-[10px]"
-                        title="حذف صورة الأداة"
-                      >
-                        حذف الصورة
-                      </button>
-                    </div>
-                    {currentUser?.role !== 'supervisor' && (
+                  {isAdmin && (
+                    <div className="px-3 py-2 bg-slate-50 border-t border-slate-100 flex items-center justify-between text-xs">
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => {
+                            setTargetInstForImage(inst);
+                            singleImageInputRef.current?.click();
+                          }}
+                          className="text-blue-600 hover:underline font-bold text-[10px] cursor-pointer"
+                        >
+                          تغيير الصورة
+                        </button>
+                        <button
+                          onClick={async () => {
+                            if (confirm(`هل أنت متأكد من حذف صورة الأداة (${inst.code} - ${inst.name})؟`)) {
+                              await SurgicalService.removeInstrumentImage(inst);
+                              loadData();
+                            }
+                          }}
+                          className="text-rose-600 hover:underline font-bold text-[10px] cursor-pointer"
+                          title="حذف صورة الأداة"
+                        >
+                          حذف الصورة
+                        </button>
+                      </div>
                       <button
                         onClick={() => openEditInstModal(inst)}
-                        className="text-slate-600 hover:text-slate-900 text-[10px]"
+                        className="text-slate-600 hover:text-slate-900 text-[10px] font-bold cursor-pointer"
                       >
                         تعديل
                       </button>
-                    )}
-                  </div>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -2365,35 +2374,39 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
             {/* Action Buttons Footer */}
             <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100">
               <div className="flex items-center gap-2">
-                {/* Change or Upload Image */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (previewTarget?.type === 'set' && previewTarget.set) {
-                      setTargetSetForImage(previewTarget.set);
-                      setCoverInputRef.current?.click();
-                    } else if (previewTarget?.type === 'instrument' && previewTarget.instrument) {
-                      setTargetInstForImage(previewTarget.instrument);
-                      singleImageInputRef.current?.click();
-                    }
-                  }}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-xs transition-colors cursor-pointer"
-                >
-                  <Camera className="w-4 h-4" />
-                  <span>{previewImageUrl ? 'تغيير أو تحديث الصورة' : 'اختيار ورفع صورة الآن'}</span>
-                </button>
+                {/* Change or Upload Image (Admin Only) */}
+                {isAdmin && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (previewTarget?.type === 'set' && previewTarget.set) {
+                          setTargetSetForImage(previewTarget.set);
+                          setCoverInputRef.current?.click();
+                        } else if (previewTarget?.type === 'instrument' && previewTarget.instrument) {
+                          setTargetInstForImage(previewTarget.instrument);
+                          singleImageInputRef.current?.click();
+                        }
+                      }}
+                      className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-xs transition-colors cursor-pointer"
+                    >
+                      <Camera className="w-4 h-4" />
+                      <span>{previewImageUrl ? 'تغيير أو تحديث الصورة' : 'اختيار ورفع صورة الآن'}</span>
+                    </button>
 
-                {/* Delete Image */}
-                {previewImageUrl && (
-                  <button
-                    type="button"
-                    onClick={handleDeletePreviewImage}
-                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold text-xs transition-colors cursor-pointer"
-                    title="حذف هذه الصورة"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    <span>حذف الصورة</span>
-                  </button>
+                    {/* Delete Image */}
+                    {previewImageUrl && (
+                      <button
+                        type="button"
+                        onClick={handleDeletePreviewImage}
+                        className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold text-xs transition-colors cursor-pointer"
+                        title="حذف هذه الصورة"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>حذف الصورة</span>
+                      </button>
+                    )}
+                  </>
                 )}
               </div>
 

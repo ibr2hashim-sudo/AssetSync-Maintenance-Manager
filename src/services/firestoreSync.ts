@@ -431,13 +431,29 @@ export class FirestoreSyncService {
         const snap = await getDoc(doc(db, 'surgical_sets', change.id));
         if (snap.exists()) {
           const remoteSet = snap.data() as SurgicalSet;
+          if (remoteSet.imageUrl) {
+            saveImageToDB(`set_${remoteSet.id}`, remoteSet.imageUrl).catch(() => {});
+            saveImageToDB(`set_code_${remoteSet.code}`, remoteSet.imageUrl).catch(() => {});
+            if (remoteSet.code) saveImageToDB(remoteSet.code, remoteSet.imageUrl).catch(() => {});
+            if (remoteSet.imageUrl.startsWith('data:') || remoteSet.imageUrl.length > 250) {
+              remoteSet.imageUrl = `idb://set_${remoteSet.id}`;
+            }
+          }
           const idx = sets.findIndex((s) => s.id === change.id || s.code === remoteSet.code);
           if (idx !== -1) {
             sets[idx] = remoteSet;
           } else {
             sets.unshift(remoteSet);
           }
-          localStorage.setItem('asset_mgmt_surgical_sets', JSON.stringify(sets));
+          try {
+            localStorage.setItem('asset_mgmt_surgical_sets', JSON.stringify(sets));
+          } catch {
+            const strippedSets = sets.map((s) => ({
+              ...s,
+              imageUrl: s.imageUrl ? `idb://set_${s.id}` : undefined,
+            }));
+            localStorage.setItem('asset_mgmt_surgical_sets', JSON.stringify(strippedSets));
+          }
           return true;
         }
       }
@@ -460,29 +476,43 @@ export class FirestoreSyncService {
         const snap = await getDoc(doc(db, 'surgical_instruments', change.id));
         if (snap.exists()) {
           const remoteInst = snap.data() as SurgicalInstrument;
-          const idx = instruments.findIndex((i) => i.id === change.id);
-          if (idx !== -1) {
-            instruments[idx] = remoteInst;
-          } else {
-            instruments.push(remoteInst);
-          }
-          localStorage.setItem('asset_mgmt_surgical_instruments', JSON.stringify(instruments));
 
           // Also save image to IndexedDB for offline and fast render if present
           if (remoteInst.imageUrl) {
             try {
               await saveImageToDB(`inst_${remoteInst.id}`, remoteInst.imageUrl);
               await saveImageToDB(`code_${remoteInst.code}`, remoteInst.imageUrl);
+              if (remoteInst.code) await saveImageToDB(remoteInst.code, remoteInst.imageUrl);
             } catch {}
+            if (remoteInst.imageUrl.startsWith('data:') || remoteInst.imageUrl.length > 250) {
+              remoteInst.imageUrl = `idb://${remoteInst.code || remoteInst.id}`;
+            }
           } else {
             try {
               await deleteImageFromDB(`inst_${remoteInst.id}`);
               await deleteImageFromDB(`code_${remoteInst.code}`);
-              await deleteImageFromDB(remoteInst.code);
+              if (remoteInst.code) await deleteImageFromDB(remoteInst.code);
               removeSurgicalImageCache(`inst_${remoteInst.id}`);
               removeSurgicalImageCache(`code_${remoteInst.code}`);
-              removeSurgicalImageCache(remoteInst.code);
+              if (remoteInst.code) removeSurgicalImageCache(remoteInst.code);
             } catch {}
+          }
+
+          const idx = instruments.findIndex((i) => i.id === change.id);
+          if (idx !== -1) {
+            instruments[idx] = remoteInst;
+          } else {
+            instruments.push(remoteInst);
+          }
+
+          try {
+            localStorage.setItem('asset_mgmt_surgical_instruments', JSON.stringify(instruments));
+          } catch {
+            const strippedInsts = instruments.map((item) => ({
+              ...item,
+              imageUrl: item.imageUrl ? `idb://${item.code || item.id}` : undefined,
+            }));
+            localStorage.setItem('asset_mgmt_surgical_instruments', JSON.stringify(strippedInsts));
           }
 
           return true;
@@ -645,9 +675,26 @@ export class FirestoreSyncService {
         setsSnap.forEach((d) => {
           const item = d.data() as SurgicalSet;
           if (!item.syncedAt) item.syncedAt = item.updatedAt || pullNow;
+          if (item.imageUrl) {
+            saveImageToDB(`set_${item.id}`, item.imageUrl).catch(() => {});
+            saveImageToDB(`set_code_${item.code}`, item.imageUrl).catch(() => {});
+            if (item.code) saveImageToDB(item.code, item.imageUrl).catch(() => {});
+            if (item.imageUrl.startsWith('data:') || item.imageUrl.length > 250) {
+              item.imageUrl = `idb://set_${item.id}`;
+            }
+          }
           remoteSets.push(item);
         });
-        localStorage.setItem('asset_mgmt_surgical_sets', JSON.stringify(remoteSets));
+        try {
+          localStorage.setItem('asset_mgmt_surgical_sets', JSON.stringify(remoteSets));
+        } catch (setQuotaErr) {
+          console.warn('Quota warning for surgical sets, storing stripped references:', setQuotaErr);
+          const safeSets = remoteSets.map((s) => ({
+            ...s,
+            imageUrl: s.imageUrl ? `idb://set_${s.id}` : undefined,
+          }));
+          localStorage.setItem('asset_mgmt_surgical_sets', JSON.stringify(safeSets));
+        }
       }
 
       // 8. Surgical Instruments
@@ -657,20 +704,37 @@ export class FirestoreSyncService {
         instSnap.forEach((d) => {
           const inst = d.data() as SurgicalInstrument;
           if (!inst.syncedAt) inst.syncedAt = inst.updatedAt || pullNow;
-          remoteInsts.push(inst);
+          
           if (inst.imageUrl) {
             saveImageToDB(`inst_${inst.id}`, inst.imageUrl).catch(() => {});
             saveImageToDB(`code_${inst.code}`, inst.imageUrl).catch(() => {});
+            if (inst.code) saveImageToDB(inst.code, inst.imageUrl).catch(() => {});
+            // CRITICAL: Offload large raw Base64 data from localStorage into IndexedDB
+            if (inst.imageUrl.startsWith('data:') || inst.imageUrl.length > 250) {
+              inst.imageUrl = `idb://${inst.code || inst.id}`;
+            }
           } else {
             deleteImageFromDB(`inst_${inst.id}`).catch(() => {});
             deleteImageFromDB(`code_${inst.code}`).catch(() => {});
-            deleteImageFromDB(inst.code).catch(() => {});
+            if (inst.code) deleteImageFromDB(inst.code).catch(() => {});
             removeSurgicalImageCache(`inst_${inst.id}`);
             removeSurgicalImageCache(`code_${inst.code}`);
-            removeSurgicalImageCache(inst.code);
+            if (inst.code) removeSurgicalImageCache(inst.code);
           }
+          remoteInsts.push(inst);
         });
-        localStorage.setItem('asset_mgmt_surgical_instruments', JSON.stringify(remoteInsts));
+
+        // Guaranteed safe write to localStorage without quota crashes
+        try {
+          localStorage.setItem('asset_mgmt_surgical_instruments', JSON.stringify(remoteInsts));
+        } catch (instQuotaErr) {
+          console.warn('Quota exceeded writing surgical instruments, sanitizing images for localStorage:', instQuotaErr);
+          const safeInsts = remoteInsts.map((i) => ({
+            ...i,
+            imageUrl: i.imageUrl ? `idb://${i.code || i.id}` : undefined,
+          }));
+          localStorage.setItem('asset_mgmt_surgical_instruments', JSON.stringify(safeInsts));
+        }
       }
 
       localStorage.setItem(LOCAL_SYNC_STORAGE.LAST_PROCESSED_TS, String(Date.now()));
@@ -1222,8 +1286,25 @@ export class FirestoreSyncService {
       localStorage.setItem('asset_mgmt_tickets', JSON.stringify(tickets));
       localStorage.setItem('asset_mgmt_periodic', JSON.stringify(periodic));
       localStorage.setItem('asset_mgmt_audit_sessions', JSON.stringify(audits));
-      localStorage.setItem('asset_mgmt_surgical_sets', JSON.stringify(sets));
-      localStorage.setItem('asset_mgmt_surgical_instruments', JSON.stringify(instruments));
+      try {
+        localStorage.setItem('asset_mgmt_surgical_sets', JSON.stringify(sets));
+      } catch {
+        const safeSets = sets.map((s) => ({
+          ...s,
+          imageUrl: s.imageUrl?.startsWith('data:') ? `idb://set_${s.id}` : s.imageUrl,
+        }));
+        localStorage.setItem('asset_mgmt_surgical_sets', JSON.stringify(safeSets));
+      }
+
+      try {
+        localStorage.setItem('asset_mgmt_surgical_instruments', JSON.stringify(instruments));
+      } catch {
+        const safeInsts = instruments.map((i) => ({
+          ...i,
+          imageUrl: i.imageUrl?.startsWith('data:') ? `idb://${i.code || i.id}` : i.imageUrl,
+        }));
+        localStorage.setItem('asset_mgmt_surgical_instruments', JSON.stringify(safeInsts));
+      }
 
       localStorage.setItem(LOCAL_SYNC_STORAGE.LAST_PROCESSED_TS, String(Date.now()));
       localStorage.setItem(LOCAL_SYNC_STORAGE.INITIALIZED_FLAG, 'true');

@@ -144,19 +144,19 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
   const currentViewAssets = useMemo(() => {
     let list = accessibleAssets;
 
-    if (selectedDept) {
-      list = list.filter((a) => a.mainDepartment.trim() === selectedDept.trim());
-    }
+    // When there is an active search query, search across all accessible assets so that barcode or serial number scan locates the asset immediately!
+    if (!searchTerm.trim()) {
+      if (selectedDept) {
+        list = list.filter((a) => a.mainDepartment.trim() === selectedDept.trim());
+      }
 
-    if (selectedSubDept) {
-      list = list.filter((a) => {
-        const sub = a.subDepartment ? a.subDepartment.trim() : a.mainDepartment.trim();
-        return sub === selectedSubDept.trim();
-      });
-    }
-
-    // Apply Search
-    if (searchTerm.trim()) {
+      if (selectedSubDept) {
+        list = list.filter((a) => {
+          const sub = a.subDepartment ? a.subDepartment.trim() : a.mainDepartment.trim();
+          return sub === selectedSubDept.trim();
+        });
+      }
+    } else {
       const q = searchTerm.toLowerCase();
       const candidates = StorageService.normalizeCodeCandidates(searchTerm);
 
@@ -362,6 +362,201 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
       alert(err.message || 'تعذر حذف الجهاز');
     }
   };
+
+  const renderAssetCard = (asset: Asset, isSearchResult = false) => (
+    <div
+      key={asset.id}
+      className="bg-white rounded-2xl border border-slate-200/80 shadow-sm hover:shadow-md transition-all overflow-hidden flex flex-col justify-between group"
+    >
+      {/* Top Image & Status Banner */}
+      <div className="relative h-44 bg-slate-100 flex items-center justify-center overflow-hidden">
+        <AssetImage
+          src={asset.imageUrl}
+          customId={asset.customId}
+          serialNumber={asset.serialNumber}
+          deviceName={asset.deviceName}
+          alt={asset.deviceName}
+          className="w-full h-full object-cover"
+          containerClassName="w-full h-full flex items-center justify-center relative bg-slate-100"
+        />
+
+        {/* Status Badge */}
+        <div className="absolute top-3 right-3">
+          <span
+            className={`px-2.5 py-1 rounded-full text-xs font-bold shadow-sm ${
+              asset.status === 'شغال'
+                ? 'bg-emerald-500 text-white'
+                : asset.status === 'عاطل'
+                ? 'bg-red-500 text-white'
+                : 'bg-slate-700 text-white'
+            }`}
+          >
+            {asset.status}
+          </span>
+        </div>
+
+        {/* Custom ID & Sync Status Badge */}
+        <div className="absolute top-3 left-3 flex items-center gap-1.5">
+          <span className="px-2 py-0.5 rounded-lg bg-slate-900/80 text-white text-[11px] font-mono font-bold backdrop-blur-xs shadow-xs">
+            ID: {asset.customId}
+          </span>
+          <SyncStatusBadge
+            item={asset}
+            size="xs"
+            onSyncNow={async () => {
+              await FirestoreSyncService.syncAsset(asset);
+              onRefresh();
+            }}
+          />
+        </div>
+      </div>
+
+      {/* Device Info Body */}
+      <div className="p-4 space-y-2.5 flex-1">
+        <div>
+          <h4 className="text-sm font-bold text-slate-900 leading-snug">
+            {asset.deviceName}
+          </h4>
+          <div className="flex items-center justify-between gap-2 mt-1">
+            <p className="text-xs text-slate-500">
+              {asset.mainDepartment} • {asset.subDepartment}
+            </p>
+            {isSearchResult && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedDept(asset.mainDepartment);
+                  setSelectedSubDept(asset.subDepartment);
+                  setSearchTerm('');
+                }}
+                className="text-[10px] text-blue-600 hover:text-blue-800 font-bold hover:underline cursor-pointer"
+                title="الانتقال إلى موقع هذا القسم مباشرة"
+              >
+                الانتقال للقسم ↲
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Model & Manufacturer & Serial Number */}
+        <div className="grid grid-cols-2 gap-2 text-[11px] bg-slate-50 p-2.5 rounded-xl border border-slate-100">
+          <div>
+            <span className="text-slate-400 block">الموديل:</span>
+            <span className="font-semibold text-slate-800 truncate block">
+              {asset.model || '—'}
+            </span>
+          </div>
+          <div>
+            <span className="text-slate-400 block">السيريال (S.N):</span>
+            <span className="font-mono font-bold text-blue-700 truncate block">
+              {asset.serialNumber || '—'}
+            </span>
+          </div>
+          <div>
+            <span className="text-slate-400 block">الشركة:</span>
+            <span className="font-semibold text-slate-800 truncate block">
+              {asset.manufacturer || '—'}
+            </span>
+          </div>
+          <div>
+            <span className="text-slate-400 block">مستلم العهدة:</span>
+            <span className="font-semibold text-slate-800 truncate block">
+              {asset.custodian || '—'}
+            </span>
+          </div>
+        </div>
+
+        {/* Quantities & Difference */}
+        <div className="flex items-center justify-between text-xs px-2 py-1.5 rounded-lg bg-blue-50/60 border border-blue-100">
+          <div>
+            <span className="text-slate-500">حالية: </span>
+            <span className="font-bold text-slate-800">{asset.currentQuantity}</span>
+          </div>
+          <div>
+            <span className="text-slate-500">دفترية: </span>
+            <span className="font-bold text-slate-800">{asset.bookQuantity}</span>
+          </div>
+          <div>
+            <span className="text-slate-500">الفارق: </span>
+            <span
+              className={`font-black ${
+                asset.difference < 0
+                  ? 'text-red-600'
+                  : asset.difference > 0
+                  ? 'text-emerald-600'
+                  : 'text-slate-700'
+              }`}
+            >
+              {asset.difference > 0 ? `+${asset.difference}` : asset.difference}
+            </span>
+          </div>
+        </div>
+
+        {/* Accessories pills */}
+        {asset.accessories && asset.accessories.length > 0 && (
+          <div className="flex flex-wrap gap-1 pt-1">
+            {asset.accessories.map((acc, i) => (
+              <span
+                key={i}
+                className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 text-[10px] font-medium"
+              >
+                {acc}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Actions Footer */}
+      <div className="p-3 border-t border-slate-100 bg-slate-50/50 flex items-center justify-between gap-2">
+        {/* View Details */}
+        <button
+          onClick={() => {
+            setSelectedAssetDetail(asset);
+            setShowDetailModal(true);
+          }}
+          className="p-2 rounded-lg bg-white border border-slate-200 text-slate-700 hover:text-blue-600 text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+          title="عرض كامل الـ 15 بنداً"
+        >
+          <Eye className="w-3.5 h-3.5" />
+          التفاصيل
+        </button>
+
+        {/* Submit Maintenance Ticket */}
+        <button
+          onClick={() => onOpenNewTicketForAsset(asset)}
+          className="px-2.5 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 text-xs font-bold flex items-center gap-1 transition-colors cursor-pointer"
+          title="تقديم بلاغ صيانة لهذا الجهاز"
+        >
+          <Wrench className="w-3.5 h-3.5" />
+          بلاغ صيانة
+        </button>
+
+        {/* Admin Edit & Delete */}
+        {currentUser?.role === 'admin' && (
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => {
+                setEditingAsset(asset);
+                setShowAddEditModal(true);
+              }}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors cursor-pointer"
+              title="تعديل بيانات الجهاز"
+            >
+              <Edit2 className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => setDeleteAssetConfirm(asset)}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
+              title="مسح الجهاز"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 
   return (
     <div className="space-y-6">
@@ -633,9 +828,68 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
       </div>
 
       {/* ========================================================================= */}
-      {/* LEVEL 1: MAIN DEPARTMENTS LIST (When no department selected) */}
+      {/* DIRECT SEARCH RESULTS ON THE PAGE */}
       {/* ========================================================================= */}
-      {!selectedDept && (
+      {searchTerm.trim() !== '' ? (
+        <div className="space-y-4">
+          <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-blue-50 border border-blue-200/90 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 shadow-xs">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold shadow-xs">
+                <Search className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-bold text-slate-900">نتائج البحث المباشرة</h3>
+                  <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-blue-100 text-blue-800 border border-blue-200">
+                    {currentViewAssets.length} أصل / جهاز مطابق
+                  </span>
+                </div>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  عرض نتائج البحث لكلمة أو كود: <strong className="font-mono text-blue-700 font-bold">«{searchTerm}»</strong>
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setSearchTerm('')}
+              className="px-3.5 py-1.5 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5 text-slate-500" />
+              <span>إلغاء البحث والعودة لتصفح الأقسام</span>
+            </button>
+          </div>
+
+          {currentViewAssets.length === 0 ? (
+            <div className="bg-white rounded-2xl p-12 text-center border border-slate-200/80 shadow-sm space-y-3">
+              <div className="w-16 h-16 rounded-2xl bg-amber-50 text-amber-500 flex items-center justify-center mx-auto">
+                <AlertTriangle className="w-8 h-8" />
+              </div>
+              <h3 className="text-base font-bold text-slate-800">لم يتم العثور على أجهزة مطابقة</h3>
+              <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
+                لم نتمكن من إيجاد أي جهاز يطابق «<span className="font-mono font-bold text-slate-700">{searchTerm}</span>».
+                يرجى التأكد من كتابة الرقم التسلسلي (S.N) أو كود الجهاز (ID) بشكل صحيح، أو مسح الباركود / السيريال مجدداً بالكاميرا.
+              </p>
+              <button
+                type="button"
+                onClick={() => setSearchTerm('')}
+                className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition-colors cursor-pointer"
+              >
+                مسح البحث وعرض كافة الأقسام
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {currentViewAssets.map((asset) => renderAssetCard(asset, true))}
+            </div>
+          )}
+        </div>
+      ) : (
+        <>
+          {/* ========================================================================= */}
+          {/* LEVEL 1: MAIN DEPARTMENTS LIST (When no department selected) */}
+          {/* ========================================================================= */}
+          {!selectedDept && (
         <div>
           {mainDepartmentList.length === 0 ? (
             <div className="bg-white rounded-2xl p-12 text-center border border-slate-200/80 shadow-sm">
@@ -876,187 +1130,12 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {currentViewAssets.map((asset) => (
-                <div
-                  key={asset.id}
-                  className="bg-white rounded-2xl border border-slate-200/80 shadow-sm hover:shadow-md transition-all overflow-hidden flex flex-col justify-between"
-                >
-                  {/* Top Image & Status Banner */}
-                  <div className="relative h-44 bg-slate-100 flex items-center justify-center overflow-hidden">
-                    <AssetImage
-                      src={asset.imageUrl}
-                      customId={asset.customId}
-                      serialNumber={asset.serialNumber}
-                      deviceName={asset.deviceName}
-                      alt={asset.deviceName}
-                      className="w-full h-full object-cover"
-                      containerClassName="w-full h-full flex items-center justify-center relative bg-slate-100"
-                    />
-
-                    {/* Status Badge */}
-                    <div className="absolute top-3 right-3">
-                      <span
-                        className={`px-2.5 py-1 rounded-full text-xs font-bold shadow-sm ${
-                          asset.status === 'شغال'
-                            ? 'bg-emerald-500 text-white'
-                            : asset.status === 'عاطل'
-                            ? 'bg-red-500 text-white'
-                            : 'bg-slate-700 text-white'
-                        }`}
-                      >
-                        {asset.status}
-                      </span>
-                    </div>
-
-                    {/* Custom ID & Sync Status Badge */}
-                    <div className="absolute top-3 left-3 flex items-center gap-1.5">
-                      <span className="px-2 py-0.5 rounded-lg bg-slate-900/80 text-white text-[11px] font-mono font-bold backdrop-blur-xs shadow-xs">
-                        ID: {asset.customId}
-                      </span>
-                      <SyncStatusBadge
-                        item={asset}
-                        size="xs"
-                        onSyncNow={async () => {
-                          await FirestoreSyncService.syncAsset(asset);
-                          onRefresh();
-                        }}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Device Info Body */}
-                  <div className="p-4 space-y-2.5 flex-1">
-                    <div>
-                      <h4 className="text-sm font-bold text-slate-900 leading-snug">
-                        {asset.deviceName}
-                      </h4>
-                      <p className="text-xs text-slate-500 mt-0.5">
-                        {asset.mainDepartment} • {asset.subDepartment}
-                      </p>
-                    </div>
-
-                    {/* Model & Manufacturer & Serial Number */}
-                    <div className="grid grid-cols-2 gap-2 text-[11px] bg-slate-50 p-2.5 rounded-xl border border-slate-100">
-                      <div>
-                        <span className="text-slate-400 block">الموديل:</span>
-                        <span className="font-semibold text-slate-800 truncate block">
-                          {asset.model || '—'}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-slate-400 block">السيريال (S.N):</span>
-                        <span className="font-mono font-semibold text-slate-800 truncate block">
-                          {asset.serialNumber || '—'}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-slate-400 block">الشركة:</span>
-                        <span className="font-semibold text-slate-800 truncate block">
-                          {asset.manufacturer || '—'}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-slate-400 block">مستلم العهدة:</span>
-                        <span className="font-semibold text-slate-800 truncate block">
-                          {asset.custodian || '—'}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Quantities & Difference */}
-                    <div className="flex items-center justify-between text-xs px-2 py-1.5 rounded-lg bg-blue-50/60 border border-blue-100">
-                      <div>
-                        <span className="text-slate-500">حالية: </span>
-                        <span className="font-bold text-slate-800">{asset.currentQuantity}</span>
-                      </div>
-                      <div>
-                        <span className="text-slate-500">دفترية: </span>
-                        <span className="font-bold text-slate-800">{asset.bookQuantity}</span>
-                      </div>
-                      <div>
-                        <span className="text-slate-500">الفارق: </span>
-                        <span
-                          className={`font-black ${
-                            asset.difference < 0
-                              ? 'text-red-600'
-                              : asset.difference > 0
-                              ? 'text-emerald-600'
-                              : 'text-slate-700'
-                          }`}
-                        >
-                          {asset.difference > 0 ? `+${asset.difference}` : asset.difference}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Accessories pills */}
-                    {asset.accessories && asset.accessories.length > 0 && (
-                      <div className="flex flex-wrap gap-1 pt-1">
-                        {asset.accessories.map((acc, i) => (
-                          <span
-                            key={i}
-                            className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 text-[10px] font-medium"
-                          >
-                            {acc}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Actions Footer */}
-                  <div className="p-3 border-t border-slate-100 bg-slate-50/50 flex items-center justify-between gap-2">
-                    {/* View Details */}
-                    <button
-                      onClick={() => {
-                        setSelectedAssetDetail(asset);
-                        setShowDetailModal(true);
-                      }}
-                      className="p-2 rounded-lg bg-white border border-slate-200 text-slate-700 hover:text-blue-600 text-xs font-semibold flex items-center gap-1 transition-colors"
-                      title="عرض كامل الـ 15 بنداً"
-                    >
-                      <Eye className="w-3.5 h-3.5" />
-                      التفاصيل
-                    </button>
-
-                    {/* Submit Maintenance Ticket */}
-                    <button
-                      onClick={() => onOpenNewTicketForAsset(asset)}
-                      className="px-2.5 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 text-xs font-bold flex items-center gap-1 transition-colors"
-                      title="تقديم بلاغ صيانة لهذا الجهاز"
-                    >
-                      <Wrench className="w-3.5 h-3.5" />
-                      بلاغ صيانة
-                    </button>
-
-                    {/* Admin Edit & Delete */}
-                    {currentUser?.role === 'admin' && (
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={() => {
-                            setEditingAsset(asset);
-                            setShowAddEditModal(true);
-                          }}
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
-                          title="تعديل بيانات الجهاز"
-                        >
-                          <Edit2 className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={() => setDeleteAssetConfirm(asset)}
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors"
-                          title="مسح الجهاز"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ))}
+              {currentViewAssets.map((asset) => renderAssetCard(asset, false))}
             </div>
           )}
         </div>
+      )}
+        </>
       )}
 
       {/* ========================================================================= */}

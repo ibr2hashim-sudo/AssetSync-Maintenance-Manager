@@ -898,21 +898,27 @@ export const AuditView: React.FC<AuditViewProps> = ({
 
               {/* Action Buttons */}
               <div className="flex flex-wrap items-center gap-2">
-                <button
-                  onClick={() => setShowPrintModal(true)}
-                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-600/30 transition-all"
-                >
-                  <Printer className="w-4 h-4" />
-                  طباعة المحضر بالعرض (Landscape PDF)
-                </button>
+                {currentUser?.role === 'admin' && (
+                  <>
+                    <button
+                      onClick={() => setShowPrintModal(true)}
+                      className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-600/30 transition-all cursor-pointer"
+                      title="طباعة وتصدير محضر الجرد بالعرض (صلاحية الأدمن)"
+                    >
+                      <Printer className="w-4 h-4" />
+                      طباعة المحضر بالعرض (Landscape PDF)
+                    </button>
 
-                <button
-                  onClick={handleExportCSV}
-                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors"
-                >
-                  <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
-                  تصدير ملف Excel / CSV
-                </button>
+                    <button
+                      onClick={handleExportCSV}
+                      className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors cursor-pointer"
+                      title="تصدير بيانات الجرد إلى Excel / CSV (صلاحية الأدمن)"
+                    >
+                      <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+                      تصدير ملف Excel / CSV
+                    </button>
+                  </>
+                )}
 
                 {activeSession.status !== 'مكتمل_معتمد' && (
                   <>
