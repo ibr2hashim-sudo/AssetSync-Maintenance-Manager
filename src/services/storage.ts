@@ -579,6 +579,7 @@ export class StorageService {
     }
 
     // If image is a base64 data URI, store in IndexedDB and replace with idb reference
+    const rawImage = savedAsset.imageUrl;
     if (savedAsset.imageUrl && savedAsset.imageUrl.startsWith('data:')) {
       saveImageToDB(savedAsset.customId, savedAsset.imageUrl);
       if (savedAsset.serialNumber && savedAsset.serialNumber !== 'غير محدد') {
@@ -588,7 +589,7 @@ export class StorageService {
     }
 
     setItem(STORAGE_KEYS.ASSETS, assets);
-    FirestoreSyncService.syncAsset(savedAsset);
+    FirestoreSyncService.syncAsset({ ...savedAsset, imageUrl: rawImage });
     this.enqueueSyncOperation('SAVE_ASSET', savedAsset);
     return savedAsset;
   }
@@ -1886,6 +1887,9 @@ export class StorageService {
         assets[assetIdx].imageUrl = `idb://${targetCustomId}`;
         assets[assetIdx].updatedAt = new Date().toISOString();
         updatedCount++;
+
+        // Push to Firestore with real base64 image
+        FirestoreSyncService.syncAsset({ ...assets[assetIdx], imageUrl: base64 }).catch(() => {});
 
         report.successful++;
         report.items.push({

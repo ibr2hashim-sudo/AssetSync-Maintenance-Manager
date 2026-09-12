@@ -19,8 +19,10 @@ import {
   SurgicalSet,
   SurgicalInstrument,
 } from '../types';
-import { saveImageToDB, deleteImageFromDB } from './storage';
-import { removeSurgicalImageCache } from '../components/SurgicalImage';
+import { saveImageToDB, getImageFromDB, deleteImageFromDB } from './storage';
+import { setMemoryImageCache } from '../components/AssetImage';
+import { setSurgicalImageCache, removeSurgicalImageCache } from '../components/SurgicalImage';
+import { compressImageForCloud } from '../utils/cloudImageCompressor';
 
 function cleanForFirestore<T>(obj: T): T {
   return JSON.parse(JSON.stringify(obj, (_, v) => (v === undefined ? null : v)));
@@ -270,6 +272,22 @@ export class FirestoreSyncService {
         const snap = await getDoc(doc(db, 'assets', change.id));
         if (snap.exists()) {
           const remoteAsset = snap.data() as Asset;
+
+          // If remote asset has an image stored in Firestore, cache locally in IndexedDB & memory
+          if (remoteAsset.imageUrl && remoteAsset.imageUrl.startsWith('data:')) {
+            try {
+              await saveImageToDB(remoteAsset.customId, remoteAsset.imageUrl);
+              if (remoteAsset.serialNumber && remoteAsset.serialNumber !== 'غير محدد') {
+                await saveImageToDB(remoteAsset.serialNumber, remoteAsset.imageUrl);
+              }
+              setMemoryImageCache(remoteAsset.customId, remoteAsset.imageUrl);
+            } catch (imgErr) {
+              console.warn('Failed to cache remote asset image in IndexedDB:', imgErr);
+            }
+            // Store lightweight idb reference in localStorage to avoid browser quota overflow
+            remoteAsset.imageUrl = `idb://${remoteAsset.customId}`;
+          }
+
           const idx = assets.findIndex((a) => a.id === change.id || a.customId === remoteAsset.customId);
           if (idx !== -1) {
             assets[idx] = remoteAsset;
@@ -611,11 +629,25 @@ export class FirestoreSyncService {
       const assetsSnap = await getDocs(collection(db, 'assets'));
       if (!assetsSnap.empty) {
         const remoteAssets: Asset[] = [];
-        assetsSnap.forEach((d) => {
+        for (const d of assetsSnap.docs) {
           const item = d.data() as Asset;
           if (!item.syncedAt) item.syncedAt = item.updatedAt || pullNow;
+
+          // If asset image exists in cloud as Base64 data URL, cache it in IndexedDB & memory
+          if (item.imageUrl && item.imageUrl.startsWith('data:')) {
+            try {
+              await saveImageToDB(item.customId, item.imageUrl);
+              if (item.serialNumber && item.serialNumber !== 'غير محدد') {
+                await saveImageToDB(item.serialNumber, item.imageUrl);
+              }
+              setMemoryImageCache(item.customId, item.imageUrl);
+            } catch (err) {
+              console.warn('Failed to save cloud asset image to IndexedDB:', err);
+            }
+            item.imageUrl = `idb://${item.customId}`;
+          }
           remoteAssets.push(item);
-        });
+        }
         localStorage.setItem('asset_mgmt_assets', JSON.stringify(remoteAssets));
       }
 
@@ -786,6 +818,19 @@ export class FirestoreSyncService {
     try {
       const now = new Date().toISOString();
       const updatedAsset: Asset = { ...asset, syncedAt: now };
+
+      // Ensure the actual image is sent to Firestore rather than an idb:// stub
+      if (!updatedAsset.imageUrl || updatedAsset.imageUrl.startsWith('idb://')) {
+        try {
+          const idbImg = (await getImageFromDB(asset.customId)) || (asset.serialNumber ? await getImageFromDB(asset.serialNumber) : null);
+          if (idbImg && idbImg.startsWith('data:')) {
+            updatedAsset.imageUrl = await compressImageForCloud(idbImg);
+          }
+        } catch {}
+      } else if (updatedAsset.imageUrl.startsWith('data:')) {
+        updatedAsset.imageUrl = await compressImageForCloud(updatedAsset.imageUrl);
+      }
+
       const docRef = doc(db, 'assets', asset.id);
       await setDoc(docRef, cleanForFirestore(updatedAsset), { merge: true });
       await this.emitSyncChange({
@@ -1051,6 +1096,19 @@ export class FirestoreSyncService {
     try {
       const now = new Date().toISOString();
       const updatedSet: SurgicalSet = { ...set, syncedAt: now };
+
+      // Ensure the actual image is sent to Firestore
+      if (!updatedSet.imageUrl || updatedSet.imageUrl.startsWith('idb://')) {
+        try {
+          const idbImg = (await getImageFromDB(`set_${set.id}`)) || (set.code ? await getImageFromDB(set.code) : null);
+          if (idbImg && idbImg.startsWith('data:')) {
+            updatedSet.imageUrl = await compressImageForCloud(idbImg);
+          }
+        } catch {}
+      } else if (updatedSet.imageUrl.startsWith('data:')) {
+        updatedSet.imageUrl = await compressImageForCloud(updatedSet.imageUrl);
+      }
+
       const docRef = doc(db, 'surgical_sets', set.id);
       await setDoc(docRef, cleanForFirestore(updatedSet), { merge: true });
       await this.emitSyncChange({
@@ -1104,6 +1162,21 @@ export class FirestoreSyncService {
     try {
       const now = new Date().toISOString();
       const updatedInst: SurgicalInstrument = { ...instrument, syncedAt: now };
+
+      // Ensure the actual image is sent to Firestore
+      if (!updatedInst.imageUrl || updatedInst.imageUrl.startsWith('idb://')) {
+        try {
+          const idbImg =
+            (instrument.code ? await getImageFromDB(instrument.code) : null) ||
+            (await getImageFromDB(`inst_${instrument.id}`));
+          if (idbImg && idbImg.startsWith('data:')) {
+            updatedInst.imageUrl = await compressImageForCloud(idbImg);
+          }
+        } catch {}
+      } else if (updatedInst.imageUrl.startsWith('data:')) {
+        updatedInst.imageUrl = await compressImageForCloud(updatedInst.imageUrl);
+      }
+
       const docRef = doc(db, 'surgical_instruments', instrument.id);
       await setDoc(docRef, cleanForFirestore(updatedInst), { merge: true });
       await this.emitSyncChange({
@@ -1176,14 +1249,27 @@ export class FirestoreSyncService {
       const sets: SurgicalSet[] = setsStr ? JSON.parse(setsStr) : [];
       const instruments: SurgicalInstrument[] = instStr ? JSON.parse(instStr) : [];
 
-      // Batch push assets in chunks of 250
-      for (let i = 0; i < assets.length; i += 250) {
+      // Batch push assets in chunks of 50 (compressed images attached)
+      for (let i = 0; i < assets.length; i += 50) {
         const batch = writeBatch(db);
-        const chunk = assets.slice(i, i + 250);
-        chunk.forEach((asset) => {
+        const chunk = assets.slice(i, i + 50);
+        for (const asset of chunk) {
+          const cloudAsset = { ...asset };
+          if (!cloudAsset.imageUrl || cloudAsset.imageUrl.startsWith('idb://')) {
+            try {
+              const idbImg =
+                (await getImageFromDB(asset.customId)) ||
+                (asset.serialNumber ? await getImageFromDB(asset.serialNumber) : null);
+              if (idbImg && idbImg.startsWith('data:')) {
+                cloudAsset.imageUrl = await compressImageForCloud(idbImg);
+              }
+            } catch {}
+          } else if (cloudAsset.imageUrl.startsWith('data:')) {
+            cloudAsset.imageUrl = await compressImageForCloud(cloudAsset.imageUrl);
+          }
           const ref = doc(db, 'assets', asset.id);
-          batch.set(ref, cleanForFirestore(asset), { merge: true });
-        });
+          batch.set(ref, cleanForFirestore(cloudAsset), { merge: true });
+        }
         await batch.commit();
       }
 
@@ -1238,28 +1324,51 @@ export class FirestoreSyncService {
         });
       }
 
-      // Batch push surgical sets
+      // Batch push surgical sets (with compressed cover images)
       if (sets.length > 0) {
-        for (let i = 0; i < sets.length; i += 250) {
+        for (let i = 0; i < sets.length; i += 50) {
           const batch = writeBatch(db);
-          const chunk = sets.slice(i, i + 250);
-          chunk.forEach((s) => {
+          const chunk = sets.slice(i, i + 50);
+          for (const s of chunk) {
+            const cloudSet = { ...s };
+            if (!cloudSet.imageUrl || cloudSet.imageUrl.startsWith('idb://')) {
+              try {
+                const idbImg = (await getImageFromDB(`set_${s.id}`)) || (s.code ? await getImageFromDB(s.code) : null);
+                if (idbImg && idbImg.startsWith('data:')) {
+                  cloudSet.imageUrl = await compressImageForCloud(idbImg);
+                }
+              } catch {}
+            } else if (cloudSet.imageUrl.startsWith('data:')) {
+              cloudSet.imageUrl = await compressImageForCloud(cloudSet.imageUrl);
+            }
             const ref = doc(db, 'surgical_sets', s.id);
-            batch.set(ref, cleanForFirestore(s), { merge: true });
-          });
+            batch.set(ref, cleanForFirestore(cloudSet), { merge: true });
+          }
           await batch.commit();
         }
       }
 
-      // Batch push surgical instruments (with images)
+      // Batch push surgical instruments (with compressed images)
       if (instruments.length > 0) {
-        for (let i = 0; i < instruments.length; i += 100) {
+        for (let i = 0; i < instruments.length; i += 50) {
           const batch = writeBatch(db);
-          const chunk = instruments.slice(i, i + 100);
-          chunk.forEach((inst) => {
+          const chunk = instruments.slice(i, i + 50);
+          for (const inst of chunk) {
+            const cloudInst = { ...inst };
+            if (!cloudInst.imageUrl || cloudInst.imageUrl.startsWith('idb://')) {
+              try {
+                const idbImg =
+                  (inst.code ? await getImageFromDB(inst.code) : null) || (await getImageFromDB(`inst_${inst.id}`));
+                if (idbImg && idbImg.startsWith('data:')) {
+                  cloudInst.imageUrl = await compressImageForCloud(idbImg);
+                }
+              } catch {}
+            } else if (cloudInst.imageUrl.startsWith('data:')) {
+              cloudInst.imageUrl = await compressImageForCloud(cloudInst.imageUrl);
+            }
             const ref = doc(db, 'surgical_instruments', inst.id);
-            batch.set(ref, cleanForFirestore(inst), { merge: true });
-          });
+            batch.set(ref, cleanForFirestore(cloudInst), { merge: true });
+          }
           await batch.commit();
         }
       }
@@ -1322,6 +1431,113 @@ export class FirestoreSyncService {
       this.isSyncing = false;
       this.handleSyncError('pushAllLocalDataToFirestore', err);
       return { success: false, message: `فشل رفع البيانات: ${err?.message || 'خطأ غير معروف'}` };
+    }
+  }
+
+  /**
+   * Scans local IndexedDB for all asset, set, and instrument images,
+   * compresses them for optimal cloud storage, and saves them directly into Firestore.
+   * This guarantees that images uploaded on this device will immediately appear on all other devices.
+   */
+  static async uploadAllLocalImagesToCloud(
+    onProgress?: (current: number, total: number, itemName: string) => void
+  ): Promise<{ success: boolean; uploadedCount: number; message: string }> {
+    try {
+      const assetsStr = localStorage.getItem('asset_mgmt_assets');
+      const setsStr = localStorage.getItem('asset_mgmt_surgical_sets');
+      const instStr = localStorage.getItem('asset_mgmt_surgical_instruments');
+
+      const assets: Asset[] = assetsStr ? JSON.parse(assetsStr) : [];
+      const sets: SurgicalSet[] = setsStr ? JSON.parse(setsStr) : [];
+      const instruments: SurgicalInstrument[] = instStr ? JSON.parse(instStr) : [];
+
+      let uploadedCount = 0;
+      const totalItems = assets.length + sets.length + instruments.length;
+      let processed = 0;
+
+      // 1. Assets
+      for (const asset of assets) {
+        processed++;
+        if (onProgress) onProgress(processed, totalItems, asset.deviceName || asset.customId);
+
+        let imageToUpload: string | null = null;
+        if (asset.imageUrl && asset.imageUrl.startsWith('data:')) {
+          imageToUpload = asset.imageUrl;
+        } else {
+          imageToUpload =
+            (await getImageFromDB(asset.customId)) ||
+            (asset.serialNumber ? await getImageFromDB(asset.serialNumber) : null);
+        }
+
+        if (imageToUpload && imageToUpload.startsWith('data:')) {
+          const compressed = await compressImageForCloud(imageToUpload);
+          const docRef = doc(db, 'assets', asset.id);
+          await setDoc(docRef, { imageUrl: compressed, syncedAt: new Date().toISOString() }, { merge: true });
+          uploadedCount++;
+        }
+      }
+
+      // 2. Surgical Sets
+      for (const set of sets) {
+        processed++;
+        if (onProgress) onProgress(processed, totalItems, set.name || set.code);
+
+        let imageToUpload: string | null = null;
+        if (set.imageUrl && set.imageUrl.startsWith('data:')) {
+          imageToUpload = set.imageUrl;
+        } else {
+          imageToUpload = (await getImageFromDB(`set_${set.id}`)) || (set.code ? await getImageFromDB(set.code) : null);
+        }
+
+        if (imageToUpload && imageToUpload.startsWith('data:')) {
+          const compressed = await compressImageForCloud(imageToUpload);
+          const docRef = doc(db, 'surgical_sets', set.id);
+          await setDoc(docRef, { imageUrl: compressed, syncedAt: new Date().toISOString() }, { merge: true });
+          uploadedCount++;
+        }
+      }
+
+      // 3. Surgical Instruments
+      for (const inst of instruments) {
+        processed++;
+        if (onProgress) onProgress(processed, totalItems, inst.name || inst.code);
+
+        let imageToUpload: string | null = null;
+        if (inst.imageUrl && inst.imageUrl.startsWith('data:')) {
+          imageToUpload = inst.imageUrl;
+        } else {
+          imageToUpload =
+            (inst.code ? await getImageFromDB(inst.code) : null) || (await getImageFromDB(`inst_${inst.id}`));
+        }
+
+        if (imageToUpload && imageToUpload.startsWith('data:')) {
+          const compressed = await compressImageForCloud(imageToUpload);
+          const docRef = doc(db, 'surgical_instruments', inst.id);
+          await setDoc(docRef, { imageUrl: compressed, syncedAt: new Date().toISOString() }, { merge: true });
+          uploadedCount++;
+        }
+      }
+
+      // Emit a sync pulse so all connected devices immediately refresh and fetch images
+      await this.emitSyncChange({
+        col: 'assets',
+        id: 'bulk_image_sync',
+        action: 'set',
+        timestamp: Date.now(),
+      });
+
+      return {
+        success: true,
+        uploadedCount,
+        message: `تم رفع وتثبيت ${uploadedCount} صورة بنجاح إلى Firebase السحابي! ستظهر الآن تلقائياً على كافة الأجهزة الجديدة.`,
+      };
+    } catch (err: any) {
+      console.error('Failed to upload all images to cloud:', err);
+      return {
+        success: false,
+        uploadedCount: 0,
+        message: `حدث خطأ أثناء رفع الصور إلى السحابة: ${err?.message || 'خطأ غير معروف'}`,
+      };
     }
   }
 

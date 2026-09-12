@@ -106,6 +106,7 @@ export class SurgicalService {
     set.updatedAt = new Date().toISOString();
 
     // If image is a base64 data URI, store in IndexedDB and replace with lightweight reference
+    const originalSetImg = set.imageUrl;
     if (set.imageUrl && set.imageUrl.startsWith('data:')) {
       saveImageToDB(`set_${set.id}`, set.imageUrl);
       saveImageToDB(`set_code_${set.code}`, set.imageUrl);
@@ -119,7 +120,7 @@ export class SurgicalService {
       sets.unshift(set);
     }
     this.saveSets(sets);
-    FirestoreSyncService.syncSurgicalSet(set);
+    FirestoreSyncService.syncSurgicalSet({ ...set, imageUrl: originalSetImg });
   }
 
   static deleteSet(id: string): void {
@@ -171,6 +172,7 @@ export class SurgicalService {
     instrument.updatedAt = new Date().toISOString();
 
     // If image is a base64 data URI, store in IndexedDB and replace with lightweight reference
+    const originalInstImg = instrument.imageUrl;
     if (instrument.imageUrl && instrument.imageUrl.startsWith('data:')) {
       saveImageToDB(`inst_${instrument.id}`, instrument.imageUrl);
       saveImageToDB(`code_${instrument.code}`, instrument.imageUrl);
@@ -184,7 +186,7 @@ export class SurgicalService {
       instruments.push(instrument);
     }
     this.saveInstruments(instruments);
-    FirestoreSyncService.syncSurgicalInstrument(instrument);
+    FirestoreSyncService.syncSurgicalInstrument({ ...instrument, imageUrl: originalInstImg });
   }
 
   /**

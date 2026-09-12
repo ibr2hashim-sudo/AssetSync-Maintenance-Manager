@@ -10,6 +10,7 @@ import {
   CheckCircle2,
   AlertCircle,
   ShieldCheck,
+  Image as ImageIcon,
 } from 'lucide-react';
 import { FirestoreSyncService } from '../services/firestoreSync';
 import { StorageService } from '../services/storage';
@@ -35,10 +36,34 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
   // Firestore Cloud Sync State
   const [isPushingFirestore, setIsPushingFirestore] = useState(false);
   const [isPullingFirestore, setIsPullingFirestore] = useState(false);
+  const [isUploadingImages, setIsUploadingImages] = useState(false);
   const [statusMsg, setStatusMsg] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
 
   // File Inputs
   const excelComprehensiveInputRef = React.useRef<HTMLInputElement>(null);
+
+  // Upload all local images to Firebase Cloud
+  const handleUploadAllImages = async () => {
+    setIsUploadingImages(true);
+    setStatusMsg({ text: 'جاري فحص وضغط ورفع جميع الصور المحفوظة محلياً إلى Firebase...', type: 'info' });
+    try {
+      const res = await FirestoreSyncService.uploadAllLocalImagesToCloud((curr, tot, name) => {
+        setStatusMsg({
+          text: `جاري رفع الصور إلى Firebase: (${curr} من ${tot}) - ${name}`,
+          type: 'info',
+        });
+      });
+      setStatusMsg({
+        text: res.message,
+        type: res.success ? 'success' : 'error',
+      });
+      onRefresh();
+    } catch (err: any) {
+      setStatusMsg({ text: `خطأ في رفع الصور: ${err?.message || 'حدث خطأ غير متوقع'}`, type: 'error' });
+    } finally {
+      setIsUploadingImages(false);
+    }
+  };
 
   // Push local data to Firestore
   const handlePushAllToFirestore = async () => {
@@ -247,7 +272,7 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
             <button
               type="button"
               onClick={handlePullAllFromFirestore}
-              disabled={isPullingFirestore || isPushingFirestore}
+              disabled={isPullingFirestore || isPushingFirestore || isUploadingImages}
               className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold transition-all shadow-xs disabled:opacity-50 text-xs"
             >
               <Download className={`w-4 h-4 ${isPullingFirestore ? 'animate-spin' : ''}`} />
@@ -257,12 +282,28 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
             <button
               type="button"
               onClick={handlePushAllToFirestore}
-              disabled={isPullingFirestore || isPushingFirestore}
+              disabled={isPullingFirestore || isPushingFirestore || isUploadingImages}
               className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 font-bold transition-all shadow-xs disabled:opacity-50 text-xs"
             >
               <RefreshCw className={`w-4 h-4 ${isPushingFirestore ? 'animate-spin' : ''}`} />
               <span>{isPushingFirestore ? 'جاري الرفع...' : 'رفع البيانات للسحابة'}</span>
             </button>
+          </div>
+
+          {/* Button to Upload All Local Images to Firebase */}
+          <div className="pt-1">
+            <button
+              type="button"
+              onClick={handleUploadAllImages}
+              disabled={isPullingFirestore || isPushingFirestore || isUploadingImages}
+              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-bold transition-all shadow-xs disabled:opacity-50 text-xs"
+            >
+              <ImageIcon className={`w-4 h-4 ${isUploadingImages ? 'animate-pulse' : ''}`} />
+              <span>{isUploadingImages ? 'جاري رفع الصور إلى Firebase...' : 'مزامنة ورفع جميع الصور المحفوظة إلى Firebase'}</span>
+            </button>
+            <p className="text-[10px] text-slate-500 text-center mt-1.5">
+              يقوم بضغط وحفظ جميع صور الأجهزة والسيتات الجراحية على Firebase لتظهر على كافة الأجهزة فوراً.
+            </p>
           </div>
         </div>
 

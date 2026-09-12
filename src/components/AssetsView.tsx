@@ -33,6 +33,7 @@ import { BarcodeCameraScanner } from './BarcodeCameraScanner';
 import { SyncStatusBadge } from './SyncStatusBadge';
 import { FirestoreSyncService } from '../services/firestoreSync';
 import { formatSyncTimestamp } from '../utils/syncUtils';
+import { compressImageForCloud } from '../utils/cloudImageCompressor';
 
 interface AssetsViewProps {
   currentUser: User | null;
@@ -1438,14 +1439,19 @@ const AddEditAssetModal: React.FC<AddEditAssetModalProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
 
-  const handleImageFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      setImageUrl(reader.result as string);
-    };
-    reader.readAsDataURL(file);
+    try {
+      const compressed = await compressImageForCloud(file);
+      setImageUrl(compressed);
+    } catch {
+      const reader = new FileReader();
+      reader.onload = () => {
+        setImageUrl(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
   };
 
   const toggleAccessory = (acc: string) => {
