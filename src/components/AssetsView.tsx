@@ -150,7 +150,7 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
         list = list.filter((a) => a.mainDepartment.trim() === selectedDept.trim());
       }
 
-      if (selectedSubDept) {
+      if (selectedSubDept && selectedSubDept !== selectedDept) {
         list = list.filter((a) => {
           const sub = a.subDepartment ? a.subDepartment.trim() : a.mainDepartment.trim();
           return sub === selectedSubDept.trim();
