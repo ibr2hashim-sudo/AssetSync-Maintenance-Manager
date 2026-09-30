@@ -30,6 +30,7 @@ export interface Asset {
   custodian: string;           // 13. مستلم العهدة
   notes: string;               // 14. ملاحظات
   imageUrl?: string;           // 15. صورة الجهاز
+  hasCloudImage?: boolean;     // تم رفع الصورة سحابياً
   createdAt: string;
   updatedAt: string;
   syncedAt?: string;
@@ -132,6 +133,7 @@ export interface SurgicalInstrument {
   status: InstrumentStatus;     // 'سليم' | 'تالف' | 'مفقود' | 'يحتاج سن' | 'مستبعد'
   notes?: string;
   imageUrl?: string;
+  hasCloudImage?: boolean;
   updatedAt?: string;
   syncedAt?: string;
 }
@@ -146,6 +148,7 @@ export interface SurgicalSet {
   trayNumber?: string;          // e.g. حاوية تعقيم #01
   notes?: string;
   imageUrl?: string;            // Container / Tray image
+  hasCloudImage?: boolean;
   instrumentsCount?: number;
   lastSterilizedDate?: string;
   lastAuditDate?: string;

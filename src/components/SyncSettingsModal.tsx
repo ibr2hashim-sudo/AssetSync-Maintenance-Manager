@@ -38,6 +38,7 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
   const [isPullingFirestore, setIsPullingFirestore] = useState(false);
   const [isUploadingImages, setIsUploadingImages] = useState(false);
   const [statusMsg, setStatusMsg] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
+  const isQuota = FirestoreSyncService.isQuotaLimitReached();
 
   // File Inputs
   const excelComprehensiveInputRef = React.useRef<HTMLInputElement>(null);
@@ -247,9 +248,11 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
 
           <div className="p-3 rounded-xl bg-white border border-blue-100/80 flex items-center justify-between text-xs">
             <div className="flex items-center gap-2 text-slate-700">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span className={`w-2.5 h-2.5 rounded-full ${isQuota ? 'bg-amber-500' : 'bg-emerald-500 animate-pulse'}`}></span>
               <span className="font-semibold">حالة الربط السحابي:</span>
-              <span className="text-emerald-700 font-bold">متصل ومزامن</span>
+              <span className={isQuota ? 'text-amber-800 font-bold' : 'text-emerald-700 font-bold'}>
+                {isQuota ? 'استنفاد الحصة المجانية مؤقتاً ⚠️' : 'متصل ومزامن'}
+              </span>
             </div>
             {onOpenPending && (
               <button
@@ -266,6 +269,16 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
               </button>
             )}
           </div>
+
+          {isQuota && (
+            <div className="p-3 rounded-xl bg-amber-50/90 border border-amber-200 text-[11px] text-amber-900 leading-relaxed">
+              <p className="font-bold mb-1">💡 تنبيه الحصة السحابية المجانية (Spark Plan):</p>
+              <p>
+                تم الوصول للحد اليومي المجاني لقاعدة بيانات فايربيس (تتجدد تلقائياً كل 24 ساعة).
+                <strong> بياناتك الحالية محفوظة ومحمية 100% على جهازك</strong>، ويمكنك استخدام خيار <strong>استيراد/تصدير ملف Excel الشامل</strong> أدناه لمزامنة أو نقل البيانات فوراً بين أجهزتك دون انتظار السحابة!
+              </p>
+            </div>
+          )}
 
           {/* Action Buttons for Eco Sync */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">

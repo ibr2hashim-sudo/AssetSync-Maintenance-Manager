@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { getImageFromDB } from '../services/storage';
+import { getImageFromDB, saveImageToDB } from '../services/storage';
+import { FirestoreSyncService } from '../services/firestoreSync';
 
 // In-memory cache for zero-latency synchronous re-rendering
 const surgicalImageCache = new Map<string, string>();
@@ -210,6 +211,31 @@ export const SurgicalImage: React.FC<SurgicalImageProps> = ({
           }
         } catch {
           // ignore
+        }
+      }
+
+      // If not in local IndexedDB, lazy load on-demand from Cloud Images
+      if (!found && !FirestoreSyncService.isQuotaLimitReached() && isMounted) {
+        const cloudCandidates = [
+          instrumentId ? `inst_${instrumentId}` : '',
+          code ? `inst_${code}` : '',
+          setId ? `set_${setId}` : '',
+          targetKey ? (targetKey.startsWith('inst_') || targetKey.startsWith('set_') ? targetKey : `inst_${targetKey}`) : '',
+        ].filter(Boolean) as string[];
+
+        for (const cKey of cloudCandidates) {
+          const cloudImg = await FirestoreSyncService.fetchCloudImage(cKey);
+          if (cloudImg && isMounted) {
+            setResolvedSrc(cloudImg);
+            candidateKeys.forEach((k) => {
+              setSurgicalImageCache(k, cloudImg);
+              saveImageToDB(k, cloudImg).catch(() => {});
+            });
+            setIsLoading(false);
+            onResolved?.(cloudImg);
+            found = true;
+            break;
+          }
         }
       }
 

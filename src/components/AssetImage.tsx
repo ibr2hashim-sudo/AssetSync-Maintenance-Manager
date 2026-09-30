@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ImageIcon, Maximize2, X } from 'lucide-react';
-import { getImageFromDB } from '../services/storage';
+import { getImageFromDB, saveImageToDB } from '../services/storage';
+import { FirestoreSyncService } from '../services/firestoreSync';
 
 // Global in-memory cache for ultra-fast instant synchronous rendering
 const inMemoryImageCache = new Map<string, string>();
@@ -134,12 +135,37 @@ export const AssetImage: React.FC<AssetImageProps> = ({
             return;
           }
         }
+        // 4. If not found in local IndexedDB, lazy load on-demand from Cloud Images
+        if (!FirestoreSyncService.isQuotaLimitReached() && isMounted) {
+          const cloudCandidates = [
+            customId ? `asset_${customId}` : '',
+            serialNumber && serialNumber !== 'غير محدد' ? `asset_${serialNumber}` : '',
+            src?.startsWith('idb://') ? `asset_${src.replace('idb://', '')}` : '',
+          ].filter(Boolean) as string[];
+
+          for (const cKey of cloudCandidates) {
+            const cloudImg = await FirestoreSyncService.fetchCloudImage(cKey);
+            if (cloudImg && isMounted) {
+              setResolvedSrc(cloudImg);
+              setMemoryImageCache(cKey, cloudImg);
+              if (customId) {
+                setMemoryImageCache(customId, cloudImg);
+                saveImageToDB(customId, cloudImg).catch(() => {});
+              }
+              if (serialNumber && serialNumber !== 'غير محدد') {
+                saveImageToDB(serialNumber, cloudImg).catch(() => {});
+              }
+              setIsLoading(false);
+              return;
+            }
+          }
+        }
+
         if (isMounted) {
           setResolvedSrc(null);
           setIsLoading(false);
         }
       } catch (err) {
-        console.warn('AssetImage: failed to retrieve from IndexedDB', err);
         if (isMounted) {
           setResolvedSrc(null);
           setIsLoading(false);

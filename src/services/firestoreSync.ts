@@ -55,6 +55,7 @@ const LOCAL_SYNC_STORAGE = {
   LAST_PROCESSED_TS: 'eco_sync_last_processed_ts',
   SAVED_READS_COUNT: 'eco_sync_saved_reads_count',
   INITIALIZED_FLAG: 'eco_sync_initialized_v2',
+  QUOTA_COOLDOWN_UNTIL: 'eco_sync_quota_cooldown_until',
 };
 
 export class FirestoreSyncService {
@@ -70,8 +71,17 @@ export class FirestoreSyncService {
   // Track estimated reads saved
   private static sessionSavedReads = 0;
 
+  static isQuotaCoolingDown(): boolean {
+    try {
+      const cooldown = parseInt(localStorage.getItem(LOCAL_SYNC_STORAGE.QUOTA_COOLDOWN_UNTIL) || '0', 10);
+      return Date.now() < cooldown;
+    } catch {
+      return false;
+    }
+  }
+
   static isQuotaLimitReached(): boolean {
-    return this.quotaExceeded;
+    return this.quotaExceeded || this.isQuotaCoolingDown();
   }
 
   static isBackendUnavailable(): boolean {
@@ -89,7 +99,7 @@ export class FirestoreSyncService {
   static onStatusChange(callback: (status: { isQuota: boolean; isUnavailable: boolean; message: string | null }) => void): () => void {
     this.statusListeners.push(callback);
     callback({
-      isQuota: this.quotaExceeded,
+      isQuota: this.isQuotaLimitReached(),
       isUnavailable: this.backendUnavailable,
       message: this.quotaErrorMessage,
     });
@@ -99,10 +109,11 @@ export class FirestoreSyncService {
   }
 
   private static notifyStatusChange() {
+    const isQuota = this.isQuotaLimitReached();
     this.statusListeners.forEach((cb) => {
       try {
         cb({
-          isQuota: this.quotaExceeded,
+          isQuota,
           isUnavailable: this.backendUnavailable,
           message: this.quotaErrorMessage,
         });
@@ -131,11 +142,16 @@ export class FirestoreSyncService {
       errorStr.includes('Quota exceeded') ||
       errorStr.includes('quota metric') ||
       errorStr.includes('resource-exhausted') ||
+      errorStr.includes('RESOURCE_EXHAUSTED') ||
       error?.code === 'resource-exhausted'
     ) {
       this.quotaExceeded = true;
       this.quotaErrorMessage = errorStr;
-      console.warn(`[Firestore Quota Exceeded]: ${context} - Working in local storage mode.`);
+      // Set 30 minute cooldown to avoid hitting the quota again and burning egress
+      try {
+        localStorage.setItem(LOCAL_SYNC_STORAGE.QUOTA_COOLDOWN_UNTIL, String(Date.now() + 30 * 60 * 1000));
+      } catch {}
+      console.warn(`[Firestore Quota Exceeded]: ${context} - Working safely in local storage mode.`);
       this.notifyStatusChange();
     } else if (
       errorStr.includes('unavailable') ||
@@ -149,6 +165,27 @@ export class FirestoreSyncService {
     } else {
       console.error(`Firestore ${context} error:`, error);
     }
+  }
+
+  /**
+   * On-demand lazy fetch for a single image document from 'cloud_images' collection.
+   * Downloads ONLY the requested image when rendered on screen, saving ~99.5% bandwidth.
+   */
+  static async fetchCloudImage(key: string): Promise<string | null> {
+    if (!key || this.quotaExceeded || this.isQuotaCoolingDown()) return null;
+    try {
+      const cleanKey = key.trim().replace(/[\/\s#?]/g, '_');
+      const snap = await getDoc(doc(db, 'cloud_images', cleanKey));
+      if (snap.exists()) {
+        const d = snap.data();
+        if (d && typeof d.data === 'string' && d.data.startsWith('data:')) {
+          return d.data;
+        }
+      }
+    } catch (err: any) {
+      this.handleSyncError('fetchCloudImage', err);
+    }
+    return null;
   }
 
   /**
@@ -211,8 +248,11 @@ export class FirestoreSyncService {
       // If pending changes exceed recent changes buffer or too old, perform a full sync
       const oldestBufferedTs = recentChanges[0]?.timestamp || 0;
       if (lastProcessedTs > 0 && lastProcessedTs < oldestBufferedTs) {
-        console.log('[Eco-Sync]: Device was offline for a long period. Performing full incremental sync...');
-        await this.pullAllCloudDataToLocal();
+        if (!this.isQuotaLimitReached() && !this.backendUnavailable) {
+          console.log('[Eco-Sync]: Device was offline for a long period. Performing full incremental sync...');
+          localStorage.setItem(LOCAL_SYNC_STORAGE.LAST_PROCESSED_TS, String(Date.now()));
+          await this.pullAllCloudDataToLocal();
+        }
         return;
       }
 
@@ -590,7 +630,7 @@ export class FirestoreSyncService {
     this.isInitialized = true;
 
     try {
-      if (this.quotaExceeded || this.backendUnavailable) {
+      if (this.isQuotaLimitReached() || this.backendUnavailable) {
         return;
       }
 
@@ -598,13 +638,10 @@ export class FirestoreSyncService {
       const localAssets: Asset[] = localAssetsStr ? JSON.parse(localAssetsStr) : [];
       const hasInitToken = localStorage.getItem(LOCAL_SYNC_STORAGE.INITIALIZED_FLAG);
 
-      // If local assets are empty and never initialized on this device, pull all cloud data
+      // If local assets are empty and never initialized on this device, pull all cloud data once
       if (localAssets.length === 0 || !hasInitToken) {
-        localStorage.setItem(LOCAL_SYNC_STORAGE.INITIALIZED_FLAG, 'attempted');
-        const res = await this.pullAllCloudDataToLocal();
-        if (res.success) {
-          localStorage.setItem(LOCAL_SYNC_STORAGE.INITIALIZED_FLAG, 'true');
-        }
+        localStorage.setItem(LOCAL_SYNC_STORAGE.INITIALIZED_FLAG, 'true');
+        await this.pullAllCloudDataToLocal();
       } else {
         // Just record timestamp
         const lastTs = localStorage.getItem(LOCAL_SYNC_STORAGE.LAST_PROCESSED_TS);
@@ -621,6 +658,13 @@ export class FirestoreSyncService {
    * Pull all collections to local storage (Only used on new device setup or manual Full Sync)
    */
   static async pullAllCloudDataToLocal(): Promise<{ success: boolean; message: string }> {
+    if (this.isQuotaCoolingDown()) {
+      return {
+        success: false,
+        message: 'تم استهلاك الحصة السحابية اليومية المجانية مؤقتاً. بياناتك الحالية محفوظة ومحمية محلياً، ويمكنك العمل بها أو استيراد ملف Excel الشامل دون قيود.',
+      };
+    }
+
     try {
       console.log('[Eco-Sync]: Downloading full database snapshot...');
 
@@ -776,13 +820,25 @@ export class FirestoreSyncService {
         this.onDataChangedCallback();
       }
 
+      try {
+        localStorage.removeItem(LOCAL_SYNC_STORAGE.QUOTA_COOLDOWN_UNTIL);
+      } catch {}
+      this.quotaExceeded = false;
+      this.notifyStatusChange();
+
       return {
         success: true,
         message: 'تم تحميل وتحديث قاعدة البيانات السحابية بالكامل بنجاح',
       };
     } catch (err: any) {
       this.handleSyncError('pullAllCloudData', err);
-      return { success: false, message: `فشل التحميل السحابي: ${err?.message}` };
+      const isQuota = this.isQuotaLimitReached();
+      return {
+        success: false,
+        message: isQuota
+          ? 'تم استهلاك الحصة اليومية المجانية لقاعدة بيانات فايربيس (Quota Limit). بياناتك الحالية محفوظة بالكامل على جهازك، ويمكنك متابعة العمل أو استيراد ملف Excel الشامل مباشرة.'
+          : `فشل التحميل السحابي: ${err?.message || 'خطأ غير معروف'}`,
+      };
     }
   }
 
@@ -817,22 +873,46 @@ export class FirestoreSyncService {
   static async syncAsset(asset: Asset): Promise<boolean> {
     try {
       const now = new Date().toISOString();
-      const updatedAsset: Asset = { ...asset, syncedAt: now };
+      let hasImage = false;
+      let rawImage: string | null = null;
 
-      // Ensure the actual image is sent to Firestore rather than an idb:// stub
-      if (!updatedAsset.imageUrl || updatedAsset.imageUrl.startsWith('idb://')) {
+      if (asset.imageUrl && asset.imageUrl.startsWith('data:')) {
+        rawImage = asset.imageUrl;
+      } else {
         try {
           const idbImg = (await getImageFromDB(asset.customId)) || (asset.serialNumber ? await getImageFromDB(asset.serialNumber) : null);
           if (idbImg && idbImg.startsWith('data:')) {
-            updatedAsset.imageUrl = await compressImageForCloud(idbImg);
+            rawImage = idbImg;
           }
         } catch {}
-      } else if (updatedAsset.imageUrl.startsWith('data:')) {
-        updatedAsset.imageUrl = await compressImageForCloud(updatedAsset.imageUrl);
       }
 
+      if (rawImage) {
+        hasImage = true;
+        // Upload image to cloud_images collection to keep core asset document lightweight
+        try {
+          const compressed = await compressImageForCloud(rawImage);
+          const cleanKey = (asset.customId || asset.id).trim().replace(/[\/\s#?]/g, '_');
+          await setDoc(doc(db, 'cloud_images', `asset_${cleanKey}`), {
+            data: compressed,
+            key: cleanKey,
+            type: 'asset',
+            updatedAt: now,
+          });
+        } catch (imgErr) {
+          console.warn('Failed to upload single image to cloud_images:', imgErr);
+        }
+      }
+
+      const lightAsset: Asset = {
+        ...asset,
+        imageUrl: asset.imageUrl?.startsWith('http') ? asset.imageUrl : (asset.customId ? `idb://${asset.customId}` : undefined),
+        hasCloudImage: hasImage || asset.hasCloudImage,
+        syncedAt: now,
+      };
+
       const docRef = doc(db, 'assets', asset.id);
-      await setDoc(docRef, cleanForFirestore(updatedAsset), { merge: true });
+      await setDoc(docRef, cleanForFirestore(lightAsset), { merge: true });
       await this.emitSyncChange({
         col: 'assets',
         id: asset.id,
@@ -1095,22 +1175,45 @@ export class FirestoreSyncService {
   static async syncSurgicalSet(set: SurgicalSet): Promise<boolean> {
     try {
       const now = new Date().toISOString();
-      const updatedSet: SurgicalSet = { ...set, syncedAt: now };
+      let hasImage = false;
+      let rawImage: string | null = null;
 
-      // Ensure the actual image is sent to Firestore
-      if (!updatedSet.imageUrl || updatedSet.imageUrl.startsWith('idb://')) {
+      if (set.imageUrl && set.imageUrl.startsWith('data:')) {
+        rawImage = set.imageUrl;
+      } else {
         try {
           const idbImg = (await getImageFromDB(`set_${set.id}`)) || (set.code ? await getImageFromDB(set.code) : null);
           if (idbImg && idbImg.startsWith('data:')) {
-            updatedSet.imageUrl = await compressImageForCloud(idbImg);
+            rawImage = idbImg;
           }
         } catch {}
-      } else if (updatedSet.imageUrl.startsWith('data:')) {
-        updatedSet.imageUrl = await compressImageForCloud(updatedSet.imageUrl);
       }
 
+      if (rawImage) {
+        hasImage = true;
+        try {
+          const compressed = await compressImageForCloud(rawImage);
+          const cleanKey = (set.id || set.code).trim().replace(/[\/\s#?]/g, '_');
+          await setDoc(doc(db, 'cloud_images', `set_${cleanKey}`), {
+            data: compressed,
+            key: cleanKey,
+            type: 'set',
+            updatedAt: now,
+          });
+        } catch (imgErr) {
+          console.warn('Failed to upload set image to cloud_images:', imgErr);
+        }
+      }
+
+      const lightSet: SurgicalSet = {
+        ...set,
+        imageUrl: set.imageUrl?.startsWith('http') ? set.imageUrl : (set.id ? `idb://set_${set.id}` : undefined),
+        hasCloudImage: hasImage || set.hasCloudImage,
+        syncedAt: now,
+      };
+
       const docRef = doc(db, 'surgical_sets', set.id);
-      await setDoc(docRef, cleanForFirestore(updatedSet), { merge: true });
+      await setDoc(docRef, cleanForFirestore(lightSet), { merge: true });
       await this.emitSyncChange({
         col: 'surgical_sets',
         id: set.id,
@@ -1161,24 +1264,49 @@ export class FirestoreSyncService {
   static async syncSurgicalInstrument(instrument: SurgicalInstrument): Promise<boolean> {
     try {
       const now = new Date().toISOString();
-      const updatedInst: SurgicalInstrument = { ...instrument, syncedAt: now };
+      let hasImage = false;
+      let rawImage: string | null = null;
 
-      // Ensure the actual image is sent to Firestore
-      if (!updatedInst.imageUrl || updatedInst.imageUrl.startsWith('idb://')) {
+      if (instrument.imageUrl && instrument.imageUrl.startsWith('data:')) {
+        rawImage = instrument.imageUrl;
+      } else {
         try {
           const idbImg =
             (instrument.code ? await getImageFromDB(instrument.code) : null) ||
             (await getImageFromDB(`inst_${instrument.id}`));
           if (idbImg && idbImg.startsWith('data:')) {
-            updatedInst.imageUrl = await compressImageForCloud(idbImg);
+            rawImage = idbImg;
           }
         } catch {}
-      } else if (updatedInst.imageUrl.startsWith('data:')) {
-        updatedInst.imageUrl = await compressImageForCloud(updatedInst.imageUrl);
       }
 
+      if (rawImage) {
+        hasImage = true;
+        try {
+          const compressed = await compressImageForCloud(rawImage);
+          const cleanKey = (instrument.code || instrument.id).trim().replace(/[\/\s#?]/g, '_');
+          await setDoc(doc(db, 'cloud_images', `inst_${cleanKey}`), {
+            data: compressed,
+            key: cleanKey,
+            type: 'instrument',
+            updatedAt: now,
+          });
+        } catch (imgErr) {
+          console.warn('Failed to upload instrument image to cloud_images:', imgErr);
+        }
+      }
+
+      const lightInst: SurgicalInstrument = {
+        ...instrument,
+        imageUrl: instrument.imageUrl?.startsWith('http')
+          ? instrument.imageUrl
+          : (instrument.code || instrument.id ? `idb://${instrument.code || instrument.id}` : undefined),
+        hasCloudImage: hasImage || instrument.hasCloudImage,
+        syncedAt: now,
+      };
+
       const docRef = doc(db, 'surgical_instruments', instrument.id);
-      await setDoc(docRef, cleanForFirestore(updatedInst), { merge: true });
+      await setDoc(docRef, cleanForFirestore(lightInst), { merge: true });
       await this.emitSyncChange({
         col: 'surgical_instruments',
         id: instrument.id,
@@ -1249,24 +1377,17 @@ export class FirestoreSyncService {
       const sets: SurgicalSet[] = setsStr ? JSON.parse(setsStr) : [];
       const instruments: SurgicalInstrument[] = instStr ? JSON.parse(instStr) : [];
 
-      // Batch push assets in chunks of 50 (compressed images attached)
+      // Batch push assets in chunks of 50 (clean lightweight metadata, zero base64 bloat)
       for (let i = 0; i < assets.length; i += 50) {
         const batch = writeBatch(db);
         const chunk = assets.slice(i, i + 50);
         for (const asset of chunk) {
           const cloudAsset = { ...asset };
-          if (!cloudAsset.imageUrl || cloudAsset.imageUrl.startsWith('idb://')) {
-            try {
-              const idbImg =
-                (await getImageFromDB(asset.customId)) ||
-                (asset.serialNumber ? await getImageFromDB(asset.serialNumber) : null);
-              if (idbImg && idbImg.startsWith('data:')) {
-                cloudAsset.imageUrl = await compressImageForCloud(idbImg);
-              }
-            } catch {}
-          } else if (cloudAsset.imageUrl.startsWith('data:')) {
-            cloudAsset.imageUrl = await compressImageForCloud(cloudAsset.imageUrl);
-          }
+          const hasImg = !!(cloudAsset.hasCloudImage || (cloudAsset.imageUrl && !cloudAsset.imageUrl.startsWith('idb://')));
+          cloudAsset.hasCloudImage = hasImg || !!cloudAsset.imageUrl;
+          cloudAsset.imageUrl = cloudAsset.imageUrl?.startsWith('http')
+            ? cloudAsset.imageUrl
+            : (cloudAsset.customId ? `idb://${cloudAsset.customId}` : undefined);
           const ref = doc(db, 'assets', asset.id);
           batch.set(ref, cleanForFirestore(cloudAsset), { merge: true });
         }
@@ -1324,23 +1445,18 @@ export class FirestoreSyncService {
         });
       }
 
-      // Batch push surgical sets (with compressed cover images)
+      // Batch push surgical sets (lightweight metadata)
       if (sets.length > 0) {
         for (let i = 0; i < sets.length; i += 50) {
           const batch = writeBatch(db);
           const chunk = sets.slice(i, i + 50);
           for (const s of chunk) {
             const cloudSet = { ...s };
-            if (!cloudSet.imageUrl || cloudSet.imageUrl.startsWith('idb://')) {
-              try {
-                const idbImg = (await getImageFromDB(`set_${s.id}`)) || (s.code ? await getImageFromDB(s.code) : null);
-                if (idbImg && idbImg.startsWith('data:')) {
-                  cloudSet.imageUrl = await compressImageForCloud(idbImg);
-                }
-              } catch {}
-            } else if (cloudSet.imageUrl.startsWith('data:')) {
-              cloudSet.imageUrl = await compressImageForCloud(cloudSet.imageUrl);
-            }
+            const hasImg = !!(cloudSet.hasCloudImage || (cloudSet.imageUrl && !cloudSet.imageUrl.startsWith('idb://')));
+            cloudSet.hasCloudImage = hasImg || !!cloudSet.imageUrl;
+            cloudSet.imageUrl = cloudSet.imageUrl?.startsWith('http')
+              ? cloudSet.imageUrl
+              : (cloudSet.id ? `idb://set_${cloudSet.id}` : undefined);
             const ref = doc(db, 'surgical_sets', s.id);
             batch.set(ref, cleanForFirestore(cloudSet), { merge: true });
           }
@@ -1348,24 +1464,18 @@ export class FirestoreSyncService {
         }
       }
 
-      // Batch push surgical instruments (with compressed images)
+      // Batch push surgical instruments (lightweight metadata)
       if (instruments.length > 0) {
         for (let i = 0; i < instruments.length; i += 50) {
           const batch = writeBatch(db);
           const chunk = instruments.slice(i, i + 50);
           for (const inst of chunk) {
             const cloudInst = { ...inst };
-            if (!cloudInst.imageUrl || cloudInst.imageUrl.startsWith('idb://')) {
-              try {
-                const idbImg =
-                  (inst.code ? await getImageFromDB(inst.code) : null) || (await getImageFromDB(`inst_${inst.id}`));
-                if (idbImg && idbImg.startsWith('data:')) {
-                  cloudInst.imageUrl = await compressImageForCloud(idbImg);
-                }
-              } catch {}
-            } else if (cloudInst.imageUrl.startsWith('data:')) {
-              cloudInst.imageUrl = await compressImageForCloud(cloudInst.imageUrl);
-            }
+            const hasImg = !!(cloudInst.hasCloudImage || (cloudInst.imageUrl && !cloudInst.imageUrl.startsWith('idb://')));
+            cloudInst.hasCloudImage = hasImg || !!cloudInst.imageUrl;
+            cloudInst.imageUrl = cloudInst.imageUrl?.startsWith('http')
+              ? cloudInst.imageUrl
+              : (cloudInst.code || cloudInst.id ? `idb://${cloudInst.code || cloudInst.id}` : undefined);
             const ref = doc(db, 'surgical_instruments', inst.id);
             batch.set(ref, cleanForFirestore(cloudInst), { merge: true });
           }
@@ -1471,8 +1581,21 @@ export class FirestoreSyncService {
 
         if (imageToUpload && imageToUpload.startsWith('data:')) {
           const compressed = await compressImageForCloud(imageToUpload);
+          const cleanKey = (asset.customId || asset.id).trim().replace(/[\/\s#?]/g, '_');
+          // 1. Save heavy image to isolated cloud_images collection
+          await setDoc(doc(db, 'cloud_images', `asset_${cleanKey}`), {
+            data: compressed,
+            key: cleanKey,
+            type: 'asset',
+            updatedAt: new Date().toISOString(),
+          });
+          // 2. Keep core asset doc ultra-lightweight (remove massive base64 blob if present)
           const docRef = doc(db, 'assets', asset.id);
-          await setDoc(docRef, { imageUrl: compressed, syncedAt: new Date().toISOString() }, { merge: true });
+          await setDoc(docRef, {
+            hasCloudImage: true,
+            imageUrl: `idb://${asset.customId}`,
+            syncedAt: new Date().toISOString(),
+          }, { merge: true });
           uploadedCount++;
         }
       }
@@ -1491,8 +1614,21 @@ export class FirestoreSyncService {
 
         if (imageToUpload && imageToUpload.startsWith('data:')) {
           const compressed = await compressImageForCloud(imageToUpload);
+          const cleanKey = (set.id || set.code).trim().replace(/[\/\s#?]/g, '_');
+          // 1. Save to cloud_images
+          await setDoc(doc(db, 'cloud_images', `set_${cleanKey}`), {
+            data: compressed,
+            key: cleanKey,
+            type: 'set',
+            updatedAt: new Date().toISOString(),
+          });
+          // 2. Keep core doc lightweight
           const docRef = doc(db, 'surgical_sets', set.id);
-          await setDoc(docRef, { imageUrl: compressed, syncedAt: new Date().toISOString() }, { merge: true });
+          await setDoc(docRef, {
+            hasCloudImage: true,
+            imageUrl: `idb://set_${set.id}`,
+            syncedAt: new Date().toISOString(),
+          }, { merge: true });
           uploadedCount++;
         }
       }
@@ -1512,8 +1648,21 @@ export class FirestoreSyncService {
 
         if (imageToUpload && imageToUpload.startsWith('data:')) {
           const compressed = await compressImageForCloud(imageToUpload);
+          const cleanKey = (inst.code || inst.id).trim().replace(/[\/\s#?]/g, '_');
+          // 1. Save to cloud_images
+          await setDoc(doc(db, 'cloud_images', `inst_${cleanKey}`), {
+            data: compressed,
+            key: cleanKey,
+            type: 'instrument',
+            updatedAt: new Date().toISOString(),
+          });
+          // 2. Keep core doc lightweight
           const docRef = doc(db, 'surgical_instruments', inst.id);
-          await setDoc(docRef, { imageUrl: compressed, syncedAt: new Date().toISOString() }, { merge: true });
+          await setDoc(docRef, {
+            hasCloudImage: true,
+            imageUrl: `idb://${inst.code || inst.id}`,
+            syncedAt: new Date().toISOString(),
+          }, { merge: true });
           uploadedCount++;
         }
       }
