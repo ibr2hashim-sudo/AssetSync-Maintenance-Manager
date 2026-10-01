@@ -668,156 +668,220 @@ export class FirestoreSyncService {
     try {
       console.log('[Eco-Sync]: Downloading full database snapshot...');
 
-      // 1. Assets
       const pullNow = new Date().toISOString();
-      const assetsSnap = await getDocs(collection(db, 'assets'));
-      if (!assetsSnap.empty) {
-        const remoteAssets: Asset[] = [];
-        for (const d of assetsSnap.docs) {
-          const item = d.data() as Asset;
-          if (!item.syncedAt) item.syncedAt = item.updatedAt || pullNow;
+      const pulledParts: string[] = [];
+      let hadQuotaError = false;
 
-          // If asset image exists in cloud as Base64 data URL, cache it in IndexedDB & memory
-          if (item.imageUrl && item.imageUrl.startsWith('data:')) {
-            try {
-              await saveImageToDB(item.customId, item.imageUrl);
-              if (item.serialNumber && item.serialNumber !== 'غير محدد') {
-                await saveImageToDB(item.serialNumber, item.imageUrl);
+      // 1. Assets
+      try {
+        const assetsSnap = await getDocs(collection(db, 'assets'));
+        if (!assetsSnap.empty) {
+          const remoteAssets: Asset[] = [];
+          for (const d of assetsSnap.docs) {
+            const item = d.data() as Asset;
+            if (!item.syncedAt) item.syncedAt = item.updatedAt || pullNow;
+
+            // If asset image exists in cloud as Base64 data URL, cache it in IndexedDB & memory
+            if (item.imageUrl && item.imageUrl.startsWith('data:')) {
+              try {
+                await saveImageToDB(item.customId, item.imageUrl);
+                if (item.serialNumber && item.serialNumber !== 'غير محدد') {
+                  await saveImageToDB(item.serialNumber, item.imageUrl);
+                }
+                setMemoryImageCache(item.customId, item.imageUrl);
+              } catch (err) {
+                console.warn('Failed to save cloud asset image to IndexedDB:', err);
               }
-              setMemoryImageCache(item.customId, item.imageUrl);
-            } catch (err) {
-              console.warn('Failed to save cloud asset image to IndexedDB:', err);
+              item.imageUrl = `idb://${item.customId}`;
             }
-            item.imageUrl = `idb://${item.customId}`;
+            remoteAssets.push(item);
           }
-          remoteAssets.push(item);
+          localStorage.setItem('asset_mgmt_assets', JSON.stringify(remoteAssets));
+          pulledParts.push(`${remoteAssets.length} أصل`);
         }
-        localStorage.setItem('asset_mgmt_assets', JSON.stringify(remoteAssets));
+      } catch (assetErr: any) {
+        if (String(assetErr).includes('Quota') || String(assetErr).includes('resource-exhausted')) hadQuotaError = true;
+        this.handleSyncError('pullAllCloudData:assets', assetErr);
       }
 
       // 2. Tickets
-      const ticketsSnap = await getDocs(collection(db, 'tickets'));
-      if (!ticketsSnap.empty) {
-        const remoteTickets: MaintenanceTicket[] = [];
-        ticketsSnap.forEach((d) => {
-          const item = d.data() as MaintenanceTicket;
-          if (!item.syncedAt) item.syncedAt = item.updatedAt || pullNow;
-          remoteTickets.push(item);
-        });
-        localStorage.setItem('asset_mgmt_tickets', JSON.stringify(remoteTickets));
+      try {
+        const ticketsSnap = await getDocs(collection(db, 'tickets'));
+        if (!ticketsSnap.empty) {
+          const remoteTickets: MaintenanceTicket[] = [];
+          ticketsSnap.forEach((d) => {
+            const item = d.data() as MaintenanceTicket;
+            if (!item.syncedAt) item.syncedAt = item.updatedAt || pullNow;
+            remoteTickets.push(item);
+          });
+          localStorage.setItem('asset_mgmt_tickets', JSON.stringify(remoteTickets));
+          pulledParts.push(`${remoteTickets.length} بلاغ`);
+        }
+      } catch (ticketErr: any) {
+        if (String(ticketErr).includes('Quota') || String(ticketErr).includes('resource-exhausted')) hadQuotaError = true;
+        this.handleSyncError('pullAllCloudData:tickets', ticketErr);
       }
 
       // 3. Periodic
-      const periodicSnap = await getDocs(collection(db, 'periodic_records'));
-      if (!periodicSnap.empty) {
-        const remotePeriodic: PeriodicMaintenanceRecord[] = [];
-        periodicSnap.forEach((d) => {
-          const item = d.data() as PeriodicMaintenanceRecord;
-          if (!item.syncedAt) item.syncedAt = item.updatedAt || pullNow;
-          remotePeriodic.push(item);
-        });
-        localStorage.setItem('asset_mgmt_periodic', JSON.stringify(remotePeriodic));
+      try {
+        const periodicSnap = await getDocs(collection(db, 'periodic_records'));
+        if (!periodicSnap.empty) {
+          const remotePeriodic: PeriodicMaintenanceRecord[] = [];
+          periodicSnap.forEach((d) => {
+            const item = d.data() as PeriodicMaintenanceRecord;
+            if (!item.syncedAt) item.syncedAt = item.updatedAt || pullNow;
+            remotePeriodic.push(item);
+          });
+          localStorage.setItem('asset_mgmt_periodic', JSON.stringify(remotePeriodic));
+          pulledParts.push(`${remotePeriodic.length} صيانة دورية`);
+        }
+      } catch (pErr: any) {
+        if (String(pErr).includes('Quota') || String(pErr).includes('resource-exhausted')) hadQuotaError = true;
+        this.handleSyncError('pullAllCloudData:periodic', pErr);
       }
 
       // 4. Audits
-      const auditsSnap = await getDocs(collection(db, 'audit_sessions'));
-      if (!auditsSnap.empty) {
-        const remoteAudits: AuditSession[] = [];
-        auditsSnap.forEach((d) => remoteAudits.push(d.data() as AuditSession));
-        localStorage.setItem('asset_mgmt_audit_sessions', JSON.stringify(remoteAudits));
+      try {
+        const auditsSnap = await getDocs(collection(db, 'audit_sessions'));
+        if (!auditsSnap.empty) {
+          const remoteAudits: AuditSession[] = [];
+          auditsSnap.forEach((d) => remoteAudits.push(d.data() as AuditSession));
+          localStorage.setItem('asset_mgmt_audit_sessions', JSON.stringify(remoteAudits));
+          pulledParts.push(`${remoteAudits.length} جلسة جرد`);
+        }
+      } catch (auditErr: any) {
+        if (String(auditErr).includes('Quota') || String(auditErr).includes('resource-exhausted')) hadQuotaError = true;
+        this.handleSyncError('pullAllCloudData:audits', auditErr);
       }
 
       // 5. Users
-      const usersSnap = await getDocs(collection(db, 'users'));
-      if (!usersSnap.empty) {
-        const remoteUsers: User[] = [];
-        usersSnap.forEach((d) => remoteUsers.push(d.data() as User));
-        localStorage.setItem('asset_mgmt_users', JSON.stringify(remoteUsers));
+      try {
+        const usersSnap = await getDocs(collection(db, 'users'));
+        if (!usersSnap.empty) {
+          const remoteUsers: User[] = [];
+          usersSnap.forEach((d) => remoteUsers.push(d.data() as User));
+          localStorage.setItem('asset_mgmt_users', JSON.stringify(remoteUsers));
+          pulledParts.push(`${remoteUsers.length} مستخدم`);
+        }
+      } catch (userErr: any) {
+        if (String(userErr).includes('Quota') || String(userErr).includes('resource-exhausted')) hadQuotaError = true;
+        this.handleSyncError('pullAllCloudData:users', userErr);
       }
 
       // 6. Categories
-      const catSnap = await getDoc(doc(db, 'settings', 'categories'));
-      if (catSnap.exists()) {
-        const catData = catSnap.data();
-        if (catData?.list) {
-          localStorage.setItem('asset_mgmt_periodic_categories', JSON.stringify(catData.list));
+      try {
+        const catSnap = await getDoc(doc(db, 'settings', 'categories'));
+        if (catSnap.exists()) {
+          const catData = catSnap.data();
+          if (catData?.list) {
+            localStorage.setItem('asset_mgmt_periodic_categories', JSON.stringify(catData.list));
+          }
         }
+      } catch (catErr: any) {
+        if (String(catErr).includes('Quota') || String(catErr).includes('resource-exhausted')) hadQuotaError = true;
+        this.handleSyncError('pullAllCloudData:categories', catErr);
       }
 
       // 7. Surgical Sets
-      const setsSnap = await getDocs(collection(db, 'surgical_sets'));
-      if (!setsSnap.empty) {
-        const remoteSets: SurgicalSet[] = [];
-        setsSnap.forEach((d) => {
-          const item = d.data() as SurgicalSet;
-          if (!item.syncedAt) item.syncedAt = item.updatedAt || pullNow;
-          if (item.imageUrl) {
-            saveImageToDB(`set_${item.id}`, item.imageUrl).catch(() => {});
-            saveImageToDB(`set_code_${item.code}`, item.imageUrl).catch(() => {});
-            if (item.code) saveImageToDB(item.code, item.imageUrl).catch(() => {});
-            if (item.imageUrl.startsWith('data:') || item.imageUrl.length > 250) {
-              item.imageUrl = `idb://set_${item.id}`;
+      try {
+        const setsSnap = await getDocs(collection(db, 'surgical_sets'));
+        if (!setsSnap.empty) {
+          const remoteSets: SurgicalSet[] = [];
+          setsSnap.forEach((d) => {
+            const item = d.data() as SurgicalSet;
+            if (!item.syncedAt) item.syncedAt = item.updatedAt || pullNow;
+            if (item.imageUrl) {
+              saveImageToDB(`set_${item.id}`, item.imageUrl).catch(() => {});
+              saveImageToDB(`set_code_${item.code}`, item.imageUrl).catch(() => {});
+              if (item.code) saveImageToDB(item.code, item.imageUrl).catch(() => {});
+              if (item.imageUrl.startsWith('data:') || item.imageUrl.length > 250) {
+                item.imageUrl = `idb://set_${item.id}`;
+              }
             }
+            remoteSets.push(item);
+          });
+          try {
+            localStorage.setItem('asset_mgmt_surgical_sets', JSON.stringify(remoteSets));
+          } catch (setQuotaErr) {
+            console.warn('Quota warning for surgical sets, storing stripped references:', setQuotaErr);
+            const safeSets = remoteSets.map((s) => ({
+              ...s,
+              imageUrl: s.imageUrl ? `idb://set_${s.id}` : undefined,
+            }));
+            localStorage.setItem('asset_mgmt_surgical_sets', JSON.stringify(safeSets));
           }
-          remoteSets.push(item);
-        });
-        try {
-          localStorage.setItem('asset_mgmt_surgical_sets', JSON.stringify(remoteSets));
-        } catch (setQuotaErr) {
-          console.warn('Quota warning for surgical sets, storing stripped references:', setQuotaErr);
-          const safeSets = remoteSets.map((s) => ({
-            ...s,
-            imageUrl: s.imageUrl ? `idb://set_${s.id}` : undefined,
-          }));
-          localStorage.setItem('asset_mgmt_surgical_sets', JSON.stringify(safeSets));
+          pulledParts.push(`${remoteSets.length} سيت جراحي`);
         }
+      } catch (setErr: any) {
+        if (String(setErr).includes('Quota') || String(setErr).includes('resource-exhausted')) hadQuotaError = true;
+        this.handleSyncError('pullAllCloudData:surgical_sets', setErr);
       }
 
       // 8. Surgical Instruments
-      const instSnap = await getDocs(collection(db, 'surgical_instruments'));
-      if (!instSnap.empty) {
-        const remoteInsts: SurgicalInstrument[] = [];
-        instSnap.forEach((d) => {
-          const inst = d.data() as SurgicalInstrument;
-          if (!inst.syncedAt) inst.syncedAt = inst.updatedAt || pullNow;
-          
-          if (inst.imageUrl) {
-            saveImageToDB(`inst_${inst.id}`, inst.imageUrl).catch(() => {});
-            saveImageToDB(`code_${inst.code}`, inst.imageUrl).catch(() => {});
-            if (inst.code) saveImageToDB(inst.code, inst.imageUrl).catch(() => {});
-            // CRITICAL: Offload large raw Base64 data from localStorage into IndexedDB
-            if (inst.imageUrl.startsWith('data:') || inst.imageUrl.length > 250) {
-              inst.imageUrl = `idb://${inst.code || inst.id}`;
+      try {
+        const instSnap = await getDocs(collection(db, 'surgical_instruments'));
+        if (!instSnap.empty) {
+          const remoteInsts: SurgicalInstrument[] = [];
+          instSnap.forEach((d) => {
+            const inst = d.data() as SurgicalInstrument;
+            if (!inst.syncedAt) inst.syncedAt = inst.updatedAt || pullNow;
+            
+            if (inst.imageUrl) {
+              saveImageToDB(`inst_${inst.id}`, inst.imageUrl).catch(() => {});
+              saveImageToDB(`code_${inst.code}`, inst.imageUrl).catch(() => {});
+              if (inst.code) saveImageToDB(inst.code, inst.imageUrl).catch(() => {});
+              // CRITICAL: Offload large raw Base64 data from localStorage into IndexedDB
+              if (inst.imageUrl.startsWith('data:') || inst.imageUrl.length > 250) {
+                inst.imageUrl = `idb://${inst.code || inst.id}`;
+              }
+            } else {
+              deleteImageFromDB(`inst_${inst.id}`).catch(() => {});
+              deleteImageFromDB(`code_${inst.code}`).catch(() => {});
+              if (inst.code) deleteImageFromDB(inst.code).catch(() => {});
+              removeSurgicalImageCache(`inst_${inst.id}`);
+              removeSurgicalImageCache(`code_${inst.code}`);
+              if (inst.code) removeSurgicalImageCache(inst.code);
             }
-          } else {
-            deleteImageFromDB(`inst_${inst.id}`).catch(() => {});
-            deleteImageFromDB(`code_${inst.code}`).catch(() => {});
-            if (inst.code) deleteImageFromDB(inst.code).catch(() => {});
-            removeSurgicalImageCache(`inst_${inst.id}`);
-            removeSurgicalImageCache(`code_${inst.code}`);
-            if (inst.code) removeSurgicalImageCache(inst.code);
-          }
-          remoteInsts.push(inst);
-        });
+            remoteInsts.push(inst);
+          });
 
-        // Guaranteed safe write to localStorage without quota crashes
-        try {
-          localStorage.setItem('asset_mgmt_surgical_instruments', JSON.stringify(remoteInsts));
-        } catch (instQuotaErr) {
-          console.warn('Quota exceeded writing surgical instruments, sanitizing images for localStorage:', instQuotaErr);
-          const safeInsts = remoteInsts.map((i) => ({
-            ...i,
-            imageUrl: i.imageUrl ? `idb://${i.code || i.id}` : undefined,
-          }));
-          localStorage.setItem('asset_mgmt_surgical_instruments', JSON.stringify(safeInsts));
+          // Guaranteed safe write to localStorage without quota crashes
+          try {
+            localStorage.setItem('asset_mgmt_surgical_instruments', JSON.stringify(remoteInsts));
+          } catch (instQuotaErr) {
+            console.warn('Quota exceeded writing surgical instruments, sanitizing images for localStorage:', instQuotaErr);
+            const safeInsts = remoteInsts.map((i) => ({
+              ...i,
+              imageUrl: i.imageUrl ? `idb://${i.code || i.id}` : undefined,
+            }));
+            localStorage.setItem('asset_mgmt_surgical_instruments', JSON.stringify(safeInsts));
+          }
+          pulledParts.push(`${remoteInsts.length} أداة جراحية`);
         }
+      } catch (instErr: any) {
+        if (String(instErr).includes('Quota') || String(instErr).includes('resource-exhausted')) hadQuotaError = true;
+        this.handleSyncError('pullAllCloudData:surgical_instruments', instErr);
       }
 
       localStorage.setItem(LOCAL_SYNC_STORAGE.LAST_PROCESSED_TS, String(Date.now()));
       localStorage.setItem(LOCAL_SYNC_STORAGE.INITIALIZED_FLAG, 'true');
 
-      if (this.onDataChangedCallback) {
+      if (pulledParts.length > 0 && this.onDataChangedCallback) {
         this.onDataChangedCallback();
+      }
+
+      if (pulledParts.length > 0) {
+        const msg = hadQuotaError
+          ? `تم جلب (${pulledParts.join('، ')}) بنجاح! (مع وجود حد قراءة مؤقت على بعض الجداول الأخرى)`
+          : `تم جلب وتحديث قاعدة البيانات بنجاح: (${pulledParts.join('، ')})`;
+        return { success: true, message: msg };
+      }
+
+      if (hadQuotaError) {
+        return {
+          success: false,
+          message: 'تم استهلاك الحصة السحابية اليومية المجانية لقراءة البيانات (Free daily read units exceeded). بياناتك الحالية محفوظة ومحمية محلياً، ويمكنك استيراد ملف Excel الشامل لمتابعة العمل دون قيود.',
+        };
       }
 
       try {
