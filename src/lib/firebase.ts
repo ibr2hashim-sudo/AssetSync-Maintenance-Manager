@@ -24,6 +24,13 @@ export const db = initFirestoreInstance();
  */
 export async function testFirestoreConnection(): Promise<{ ok: boolean; error?: string; isOffline?: boolean; isQuota?: boolean }> {
   try {
+    try {
+      const cooldown = parseInt(localStorage.getItem('eco_sync_quota_cooldown_until') || '0', 10);
+      if (Date.now() < cooldown) {
+        return { ok: false, isQuota: true, error: 'Quota cooling down' };
+      }
+    } catch {}
+
     await getDocFromServer(doc(db, 'settings', 'sync_meta'));
     return { ok: true };
   } catch (error: any) {

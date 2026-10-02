@@ -47,6 +47,7 @@ export function normalizeImageUrl(url?: string | null): string | null {
 
 interface AssetImageProps {
   src?: string | null;
+  hasCloudImage?: boolean;
   customId?: string;
   serialNumber?: string;
   deviceName?: string;
@@ -61,6 +62,7 @@ interface AssetImageProps {
 
 export const AssetImage: React.FC<AssetImageProps> = ({
   src,
+  hasCloudImage,
   customId,
   serialNumber,
   deviceName,
@@ -73,6 +75,10 @@ export const AssetImage: React.FC<AssetImageProps> = ({
   onClick,
 }) => {
   const [resolvedSrc, setResolvedSrc] = useState<string | null>(() => {
+    // If there is strictly no image reference, return null immediately without any lookups
+    if (!src && !hasCloudImage) {
+      return null;
+    }
     // Initial check from memory cache or direct data URI
     if (src && (src.startsWith('data:') || src.startsWith('http'))) {
       return normalizeImageUrl(src);
@@ -95,6 +101,13 @@ export const AssetImage: React.FC<AssetImageProps> = ({
   useEffect(() => {
     let isMounted = true;
     setHasError(false);
+
+    // If strictly NO image is associated with this asset, do NOT query DB or Firestore
+    if (!src && !hasCloudImage) {
+      setResolvedSrc(null);
+      setIsLoading(false);
+      return;
+    }
 
     // 1. Direct valid URL
     if (src && !src.startsWith('idb://')) {
@@ -135,19 +148,19 @@ export const AssetImage: React.FC<AssetImageProps> = ({
             return;
           }
         }
-        // 4. If not found in local IndexedDB, lazy load on-demand from Cloud Images
-        if (!FirestoreSyncService.isQuotaLimitReached() && isMounted) {
-          const cloudCandidates = [
-            customId ? `asset_${customId}` : '',
-            serialNumber && serialNumber !== 'غير محدد' ? `asset_${serialNumber}` : '',
-            src?.startsWith('idb://') ? `asset_${src.replace('idb://', '')}` : '',
-          ].filter(Boolean) as string[];
 
-          for (const cKey of cloudCandidates) {
-            const cloudImg = await FirestoreSyncService.fetchCloudImage(cKey);
+        // 4. ONLY if explicitly flagged with cloud image or idb protocol, query Cloud Firestore ONCE
+        const shouldQueryCloud = (hasCloudImage || src?.startsWith('idb://')) && !FirestoreSyncService.isQuotaLimitReached();
+        if (shouldQueryCloud && isMounted) {
+          const primaryKey = customId
+            ? `asset_${customId}`
+            : (src?.startsWith('idb://') ? `asset_${src.replace('idb://', '')}` : (serialNumber ? `asset_${serialNumber}` : ''));
+
+          if (primaryKey) {
+            const cloudImg = await FirestoreSyncService.fetchCloudImage(primaryKey);
             if (cloudImg && isMounted) {
               setResolvedSrc(cloudImg);
-              setMemoryImageCache(cKey, cloudImg);
+              setMemoryImageCache(primaryKey, cloudImg);
               if (customId) {
                 setMemoryImageCache(customId, cloudImg);
                 saveImageToDB(customId, cloudImg).catch(() => {});

@@ -214,17 +214,15 @@ export const SurgicalImage: React.FC<SurgicalImageProps> = ({
         }
       }
 
-      // If not in local IndexedDB, lazy load on-demand from Cloud Images
-      if (!found && !FirestoreSyncService.isQuotaLimitReached() && isMounted) {
-        const cloudCandidates = [
-          instrumentId ? `inst_${instrumentId}` : '',
-          code ? `inst_${code}` : '',
-          setId ? `set_${setId}` : '',
-          targetKey ? (targetKey.startsWith('inst_') || targetKey.startsWith('set_') ? targetKey : `inst_${targetKey}`) : '',
-        ].filter(Boolean) as string[];
+      // If not in local IndexedDB, lazy load on-demand from Cloud Images ONLY if item has an idb reference
+      const shouldQueryCloud = src.startsWith('idb://') && !FirestoreSyncService.isQuotaLimitReached();
+      if (!found && shouldQueryCloud && isMounted) {
+        const cloudKey = targetKey.startsWith('inst_') || targetKey.startsWith('set_')
+          ? targetKey
+          : (instrumentId ? `inst_${instrumentId}` : (setId ? `set_${setId}` : ''));
 
-        for (const cKey of cloudCandidates) {
-          const cloudImg = await FirestoreSyncService.fetchCloudImage(cKey);
+        if (cloudKey) {
+          const cloudImg = await FirestoreSyncService.fetchCloudImage(cloudKey);
           if (cloudImg && isMounted) {
             setResolvedSrc(cloudImg);
             candidateKeys.forEach((k) => {
@@ -234,7 +232,6 @@ export const SurgicalImage: React.FC<SurgicalImageProps> = ({
             setIsLoading(false);
             onResolved?.(cloudImg);
             found = true;
-            break;
           }
         }
       }

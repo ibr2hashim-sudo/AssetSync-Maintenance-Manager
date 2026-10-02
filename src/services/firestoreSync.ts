@@ -70,6 +70,8 @@ export class FirestoreSyncService {
 
   // Track estimated reads saved
   private static sessionSavedReads = 0;
+  // Negative cache to prevent repeated reads for non-existent images
+  private static negativeImageCache = new Set<string>();
 
   static isQuotaCoolingDown(): boolean {
     try {
@@ -173,14 +175,19 @@ export class FirestoreSyncService {
    */
   static async fetchCloudImage(key: string): Promise<string | null> {
     if (!key || this.quotaExceeded || this.isQuotaCoolingDown()) return null;
+    const cleanKey = key.trim().replace(/[\/\s#?]/g, '_');
+    if (this.negativeImageCache.has(cleanKey)) return null;
+
     try {
-      const cleanKey = key.trim().replace(/[\/\s#?]/g, '_');
       const snap = await getDoc(doc(db, 'cloud_images', cleanKey));
       if (snap.exists()) {
         const d = snap.data();
         if (d && typeof d.data === 'string' && d.data.startsWith('data:')) {
           return d.data;
         }
+      } else {
+        // Document does not exist in Firestore! Remember it so we NEVER query it again!
+        this.negativeImageCache.add(cleanKey);
       }
     } catch (err: any) {
       this.handleSyncError('fetchCloudImage', err);
@@ -301,6 +308,10 @@ export class FirestoreSyncService {
   // Delta handlers for specific entities
   private static async applyAssetDelta(change: RecentChange): Promise<boolean> {
     try {
+      if (change.id === 'bulk_image_sync') {
+        return true;
+      }
+
       const assetsStr = localStorage.getItem('asset_mgmt_assets');
       const assets: Asset[] = assetsStr ? JSON.parse(assetsStr) : [];
 
@@ -638,12 +649,15 @@ export class FirestoreSyncService {
       const localAssets: Asset[] = localAssetsStr ? JSON.parse(localAssetsStr) : [];
       const hasInitToken = localStorage.getItem(LOCAL_SYNC_STORAGE.INITIALIZED_FLAG);
 
-      // If local assets are empty and never initialized on this device, pull all cloud data once
-      if (localAssets.length === 0 || !hasInitToken) {
+      // If device has never been initialized, initialize once
+      if (!hasInitToken) {
         localStorage.setItem(LOCAL_SYNC_STORAGE.INITIALIZED_FLAG, 'true');
-        await this.pullAllCloudDataToLocal();
+        // Only pull if local assets are empty and cloud sync is available
+        if (localAssets.length === 0) {
+          await this.pullAllCloudDataToLocal();
+        }
       } else {
-        // Just record timestamp
+        // Device already initialized: do not auto-pull full DB on startup (saves quota)
         const lastTs = localStorage.getItem(LOCAL_SYNC_STORAGE.LAST_PROCESSED_TS);
         if (!lastTs) {
           localStorage.setItem(LOCAL_SYNC_STORAGE.LAST_PROCESSED_TS, String(Date.now()));

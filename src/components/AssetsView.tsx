@@ -373,6 +373,7 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
       <div className="relative h-44 bg-slate-100 flex items-center justify-center overflow-hidden">
         <AssetImage
           src={asset.imageUrl}
+          hasCloudImage={asset.hasCloudImage}
           customId={asset.customId}
           serialNumber={asset.serialNumber}
           deviceName={asset.deviceName}
@@ -1874,6 +1875,7 @@ const AssetDetailModal: React.FC<AssetDetailModalProps> = ({ asset, onClose, onO
         <div className="h-60 w-full rounded-xl overflow-hidden border border-slate-200 bg-slate-100 flex items-center justify-center">
           <AssetImage
             src={asset.imageUrl}
+            hasCloudImage={asset.hasCloudImage}
             customId={asset.customId}
             serialNumber={asset.serialNumber}
             deviceName={asset.deviceName}
