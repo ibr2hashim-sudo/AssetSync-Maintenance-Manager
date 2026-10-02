@@ -101,12 +101,28 @@
         "lastUpdated": { "type": "string", "maxLength": 64 }
       },
       "required": ["version"]
+    },
+    "CloudImage": {
+      "title": "CloudImage",
+      "description": "Compressed lazy-loaded image stored separately from core metadata documents",
+      "type": "object",
+      "properties": {
+        "key": { "type": "string", "maxLength": 128 },
+        "data": { "type": "string" },
+        "type": { "type": "string", "maxLength": 50 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["key", "data"]
     }
   },
   "firestore": {
     "/assets/{assetId}": {
       "schema": "Asset",
       "description": "Hospital medical asset documents"
+    },
+    "/cloud_images/{imageId}": {
+      "schema": "CloudImage",
+      "description": "On-demand compressed asset and surgical instrument images"
     },
     "/tickets/{ticketId}": {
       "schema": "MaintenanceTicket",
